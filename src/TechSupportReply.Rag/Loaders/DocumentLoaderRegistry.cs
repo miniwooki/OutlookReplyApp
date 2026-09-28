@@ -24,6 +24,7 @@ namespace TechSupportReply.Rag.Loaders
             new PdfLoader(),
             new DocxLoader(),
             new XlsxLoader(),
+            new EmailLoader(),
         });
 
         public IReadOnlyCollection<string> SupportedExtensions => _byExtension.Keys;
