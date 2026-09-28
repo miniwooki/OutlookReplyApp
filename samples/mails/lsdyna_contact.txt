@@ -1,0 +1,4 @@
+LS-DYNA 접촉 관통 경고 문의
+안녕하세요.
+*CONTACT_AUTOMATIC_SURFACE_TO_SURFACE 를 사용하는데 d3hsp 에 초기 관통 경고가 많이 나옵니다.
+해석 결과에 영향이 있는지, 어떻게 해결해야 하는지 알려주세요.

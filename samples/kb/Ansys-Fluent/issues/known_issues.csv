@@ -1,0 +1,3 @@
+증상,조치
+"발산, floating point exception","under-relaxation 축소, 시간 간격 축소"
+역류 경고,출구 연장

@@ -1,0 +1,130 @@
+{
+  "products": [
+    {
+      "id": "ls-dyna",
+      "displayName": "LS-DYNA",
+      "folder": "LS-DYNA",
+      "keywords": [
+        "ls-dyna",
+        "lsdyna",
+        "ls dyna",
+        "*keyword",
+        "*contact",
+        "*mat_",
+        "*section",
+        "*control_",
+        "*database_",
+        "*boundary_",
+        "d3plot",
+        "d3hsp",
+        "messag",
+        "binout",
+        "mpp",
+        "smp"
+      ]
+    },
+    {
+      "id": "ls-prepost",
+      "displayName": "LS-PrePost / LS-OPT",
+      "folder": "LS-PrePost",
+      "keywords": [
+        "ls-prepost",
+        "lsprepost",
+        "lspp",
+        "ls-opt",
+        "lsopt"
+      ]
+    },
+    {
+      "id": "ansys-mechanical",
+      "displayName": "Ansys Mechanical",
+      "folder": "Ansys-Mechanical",
+      "keywords": [
+        "ansys mechanical",
+        "mechanical",
+        "mapdl",
+        "apdl",
+        "workbench",
+        "static structural",
+        "transient structural",
+        "modal",
+        "harmonic response",
+        "solve.out",
+        "ds.dat"
+      ]
+    },
+    {
+      "id": "ansys-fluent",
+      "displayName": "Ansys Fluent",
+      "folder": "Ansys-Fluent",
+      "keywords": [
+        "fluent",
+        "udf",
+        "fluent meshing",
+        "residual",
+        "under-relaxation",
+        ".cas",
+        ".dat.h5",
+        "수렴",
+        "발산"
+      ]
+    },
+    {
+      "id": "ansys-cfx",
+      "displayName": "Ansys CFX",
+      "folder": "Ansys-CFX",
+      "keywords": [
+        "cfx",
+        "cfx-pre",
+        "cfd-post",
+        "cfx-solver",
+        ".def",
+        ".res"
+      ]
+    },
+    {
+      "id": "ansys-electronics",
+      "displayName": "Ansys Electronics (HFSS/Maxwell)",
+      "folder": "Ansys-Electronics",
+      "keywords": [
+        "hfss",
+        "maxwell",
+        "aedt",
+        "electronics desktop",
+        "q3d",
+        "siwave",
+        "icepak"
+      ]
+    },
+    {
+      "id": "ansys-spaceclaim",
+      "displayName": "Ansys SpaceClaim / Discovery",
+      "folder": "Ansys-SpaceClaim",
+      "keywords": [
+        "spaceclaim",
+        "discovery",
+        ".scdoc",
+        "geometry repair"
+      ]
+    },
+    {
+      "id": "_common",
+      "displayName": "공통 (라이선스/설치)",
+      "folder": "_common",
+      "keywords": [
+        "license",
+        "licensing",
+        "라이선스",
+        "라이센스",
+        "ansyslmd",
+        "lmutil",
+        "lmgrd",
+        "flexnet",
+        "flexlm",
+        "license manager",
+        "설치",
+        "install"
+      ]
+    }
+  ]
+}

@@ -19,8 +19,6 @@ namespace TechSupportReply.Rag
     /// </summary>
     public sealed class KnowledgeRetriever : IKnowledgeRetriever, IDisposable
     {
-        private const int RrfK = 60;
-
         private sealed class OpenIndex
         {
             public string Path;
@@ -77,7 +75,7 @@ namespace TechSupportReply.Rag
                     if (string.Equals(id, productId, StringComparison.OrdinalIgnoreCase) && styleTopK > 0)
                         result.StyleExamples.AddRange(index.Retriever.Search(query, styleTopK, DocType.Reply).Select(c => ToKnowledge(id, c)));
                 }
-                result.References.AddRange(Fuse(rankings).Take(referenceTopK));
+                result.References.AddRange(Merge(rankings).Take(referenceTopK));
             }
             result.Warnings.AddRange(warnings.Distinct());
             return result;
@@ -121,35 +119,17 @@ namespace TechSupportReply.Rag
             return opened;
         }
 
-        private static IEnumerable<KnowledgeChunk> Fuse(List<List<KeyValuePair<string, StoredChunk>>> rankings)
-        {
-            var scores = new Dictionary<string, double>();
-            var chunks = new Dictionary<string, KeyValuePair<string, StoredChunk>>();
-            var order = new Dictionary<string, int>();
-            foreach (var ranking in rankings)
-            {
-                for (int i = 0; i < ranking.Count; i++)
-                {
-                    var key = ranking[i].Key + "#" + ranking[i].Value.Id;
-                    scores.TryGetValue(key, out var s);
-                    scores[key] = s + 1.0 / (RrfK + i + 1);
-                    if (!chunks.ContainsKey(key))
-                    {
-                        chunks[key] = ranking[i];
-                        order[key] = order.Count;
-                    }
-                }
-            }
-            return scores
-                .OrderByDescending(p => p.Value)
-                .ThenBy(p => order[p.Key])
-                .Select(p =>
-                {
-                    var k = ToKnowledge(chunks[p.Key].Key, chunks[p.Key].Value);
-                    k.Score = p.Value;
-                    return k;
-                });
-        }
+        /// <summary>
+        /// 제품·공통 색인의 결과를 각 색인 안에서 계산된 하이브리드 점수(같은 RRF 공식)로 합친다.
+        /// 색인별 순위만으로 다시 융합하면 무관한 공통 자료의 1위도 제품 자료 1위와 같은 점수를 받는다.
+        /// </summary>
+        private static IEnumerable<KnowledgeChunk> Merge(List<List<KeyValuePair<string, StoredChunk>>> rankings) =>
+            rankings
+                .SelectMany((list, source) => list.Select((item, rank) => new { item, source, rank }))
+                .OrderByDescending(x => x.item.Value.Score)
+                .ThenBy(x => x.rank)
+                .ThenBy(x => x.source)
+                .Select(x => ToKnowledge(x.item.Key, x.item.Value));
 
         private static KnowledgeChunk ToKnowledge(string productId, StoredChunk c) => new KnowledgeChunk
         {

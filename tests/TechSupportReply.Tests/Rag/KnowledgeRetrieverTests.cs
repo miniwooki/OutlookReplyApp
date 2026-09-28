@@ -76,6 +76,31 @@ namespace TechSupportReply.Tests.Rag
         }
 
         [Fact]
+        public async Task Retrieve_IrrelevantCommonChunk_RanksBelowRelevantProductChunks()
+        {
+            using (var tmp = new TempDir())
+            {
+                var root = tmp.Sub("kb");
+                PublishProduct(tmp, root, "ls-dyna", new Dictionary<string, string>
+                {
+                    [@"faq\a.md"] = "초기 관통 경고는 IGNORE=1로 무시합니다.",
+                    [@"faq\b.md"] = "관통 경고가 계속되면 SOFT=2를 씁니다.",
+                    [@"faq\c.md"] = "질량 스케일링은 DT2MS로 설정합니다.",
+                });
+                PublishProduct(tmp, root, "_common", new Dictionary<string, string>
+                {
+                    [@"faq\license.md"] = "라이선스 서버 방화벽 포트 확인",
+                });
+                using (var retriever = Retriever(root, tmp.Sub("cache")))
+                {
+                    var refs = (await retriever.RetrieveAsync("ls-dyna", "관통 경고", 8, 0, CancellationToken.None)).References;
+                    Assert.Equal(new[] { @"faq\a.md", @"faq\b.md" }, refs.Take(2).Select(c => c.SourceFile).ToArray());
+                    Assert.True(refs.FindIndex(c => c.ProductId == "_common") > 1);
+                }
+            }
+        }
+
+        [Fact]
         public async Task Retrieve_ProductChanged_ReturnsDifferentEvidence()
         {
             using (var tmp = new TempDir())
