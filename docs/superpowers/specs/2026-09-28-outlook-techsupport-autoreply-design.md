@@ -104,7 +104,7 @@ LlmRequest { string System; string CachedSystemPrefix; List<LlmMessage> Messages
 
 ### 3.4 RAG (`Rag/*`)
 - **청킹**: PDF는 페이지 단위로 약 600토큰씩 나누고 약 80토큰을 겹칩니다(메타: 파일·페이지). DOCX/MD는 제목 단위로 나눕니다. 메일은 1통을 1청크(질문+답변)로 만들되 서명과 인용 이력을 제거합니다. XLSX/CSV는 행 단위(`헤더: 값` 연결)로 나눕니다.
-- **저장**: SQLite(`Microsoft.Data.Sqlite`)에 `files(path,size,mtime,hash)`, `chunks(id,file_id,doc_type,title,page,text)`, `vectors(chunk_id, blob)`, `chunks_fts`(FTS5 **trigram** 토크나이저: 한국어와 `*CONTACT_...` 같은 기술 토큰에 대응) 테이블을 둡니다.
+- **저장**: SQLite(`Microsoft.Data.Sqlite`)에 `files(path,size,mtime,hash)`, `chunks(id,file_id,doc_type,title,page,text)`, `vectors(chunk_id, blob)`, `chunks_fts`(FTS5 `unicode61 tokenchars '_'`) 테이블을 둡니다. 색인/질의 텍스트는 `SearchTextNormalizer`로 **한글은 2글자 bigram**, 영문·숫자는 단어(`contact_automatic`과 `_` 분할 하위어 포함)로 변환한 뒤 저장합니다. (trigram 토크나이저는 3글자 미만 질의를 매칭하지 못해 "접촉", "수렴" 같은 2음절 한국어 용어를 찾을 수 없으므로 채택하지 않았습니다.)
 - **증분 색인**: 파일 크기·mtime·해시를 비교하여 변경된 파일만 다시 임베딩합니다. 삭제된 파일은 청크를 제거합니다.
 - **검색**: 질의 텍스트(제목 + 정리된 본문 앞부분)를 ① FTS5 BM25 top 30, ② 코사인 top 30(제품 벡터를 메모리에 로드, 브루트포스)으로 검색하고 **RRF**로 융합합니다. 결과에서 근거 top 8(선택 제품 + `_common`)과 과거 답변 top 3(문체 예시)을 가져옵니다.
 - **임베딩**: `Microsoft.ML.OnnxRuntime`(CPU, x64 네이티브)을 사용합니다. 클라이언트는 질의 1건만 임베딩하므로 빠릅니다.
