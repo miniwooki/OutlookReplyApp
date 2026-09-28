@@ -1,0 +1,6 @@
+numpy
+onnxruntime
+tokenizers
+python-docx
+openpyxl
+fpdf2
