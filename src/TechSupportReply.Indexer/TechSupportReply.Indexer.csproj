@@ -13,4 +13,7 @@
     <ProjectReference Include="..\TechSupportReply.Core\TechSupportReply.Core.csproj" />
     <ProjectReference Include="..\TechSupportReply.Rag\TechSupportReply.Rag.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
+  </ItemGroup>
 </Project>
