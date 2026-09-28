@@ -1,0 +1,176 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using TechSupportReply.Core.Knowledge;
+using TechSupportReply.Core.Products;
+using TechSupportReply.Rag.Embedding;
+using TechSupportReply.Rag.Indexing;
+using TechSupportReply.Rag.Search;
+using TechSupportReply.Rag.Store;
+using TechSupportReply.Rag.Sync;
+
+namespace TechSupportReply.Rag
+{
+    /// <summary>
+    /// 애드인이 쓰는 지식 검색기. 공유 폴더를 주기적으로 로컬 캐시와 동기화하고, 캐시 색인에서
+    /// 선택 제품 + 공통(_common)의 근거와 선택 제품의 과거 답변(문체 예시)을 찾는다.
+    /// </summary>
+    public sealed class KnowledgeRetriever : IKnowledgeRetriever, IDisposable
+    {
+        private const int RrfK = 60;
+
+        private sealed class OpenIndex
+        {
+            public string Path;
+            public SqliteIndexStore Store;
+            public HybridRetriever Retriever;
+            public IEmbedder Embedder;
+        }
+
+        private readonly IndexCacheSync _sync;
+        private readonly ProductCatalog _catalog;
+        private readonly Func<IndexManifest, IEmbedder> _embedderFactory;
+        private readonly TimeSpan _syncInterval;
+        private readonly Dictionary<string, DateTime> _lastSync = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, OpenIndex> _open = new Dictionary<string, OpenIndex>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, IEmbedder> _embedders = new Dictionary<string, IEmbedder>();
+        private readonly object _lock = new object();
+
+        public KnowledgeRetriever(IndexCacheSync sync, ProductCatalog catalog, Func<IndexManifest, IEmbedder> embedderFactory, TimeSpan? syncInterval = null)
+        {
+            _sync = sync ?? throw new ArgumentNullException(nameof(sync));
+            _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+            _embedderFactory = embedderFactory ?? (m => null);
+            _syncInterval = syncInterval ?? TimeSpan.FromMinutes(10);
+        }
+
+        public Task<RetrievalResult> RetrieveAsync(string productId, string query, int referenceTopK, int styleTopK, CancellationToken ct) =>
+            Task.Run(() => Retrieve(productId, query, referenceTopK, styleTopK, ct), ct);
+
+        private RetrievalResult Retrieve(string productId, string query, int referenceTopK, int styleTopK, CancellationToken ct)
+        {
+            var result = new RetrievalResult();
+            var warnings = new List<string>();
+            var ids = new[] { productId, ProductCatalog.CommonId }.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            lock (_lock)
+            {
+                SyncIfDue(ids, warnings, ct);
+                var embedder = Embedder(_sync.LoadLocalManifest());
+
+                var rankings = new List<List<KeyValuePair<string, StoredChunk>>>();
+                foreach (var id in ids)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var index = Open(id, embedder);
+                    if (index == null)
+                    {
+                        if (string.Equals(id, productId, StringComparison.OrdinalIgnoreCase))
+                            warnings.Add($"'{_catalog.Find(id)?.DisplayName ?? id}' 지식 색인이 없어 RAG 없이 생성합니다.");
+                        continue;
+                    }
+                    if (index.Retriever.DisabledReason != null) warnings.Add(index.Retriever.DisabledReason);
+                    rankings.Add(index.Retriever.Search(query, referenceTopK, DocType.Reference)
+                        .Select(c => new KeyValuePair<string, StoredChunk>(id, c)).ToList());
+
+                    if (string.Equals(id, productId, StringComparison.OrdinalIgnoreCase) && styleTopK > 0)
+                        result.StyleExamples.AddRange(index.Retriever.Search(query, styleTopK, DocType.Reply).Select(c => ToKnowledge(id, c)));
+                }
+                result.References.AddRange(Fuse(rankings).Take(referenceTopK));
+            }
+            result.Warnings.AddRange(warnings.Distinct());
+            return result;
+        }
+
+        private void SyncIfDue(List<string> ids, List<string> warnings, CancellationToken ct)
+        {
+            var now = DateTime.UtcNow;
+            var due = ids.Where(id => !_lastSync.TryGetValue(id, out var t) || now - t >= _syncInterval).ToList();
+            if (due.Count == 0) return;
+            var sync = _sync.Sync(due, ct);
+            warnings.AddRange(sync.Warnings);
+            foreach (var id in due) _lastSync[id] = now;
+        }
+
+        private IEmbedder Embedder(IndexManifest manifest)
+        {
+            var key = manifest?.EmbeddingModel ?? "";
+            if (!_embedders.TryGetValue(key, out var embedder))
+            {
+                embedder = _embedderFactory(manifest);
+                _embedders[key] = embedder;
+            }
+            return embedder;
+        }
+
+        private OpenIndex Open(string productId, IEmbedder embedder)
+        {
+            var path = _sync.LocalIndexPath(productId);
+            _open.TryGetValue(productId, out var current);
+            if (current != null && current.Path == path && ReferenceEquals(current.Embedder, embedder)) return current;
+            if (current != null)
+            {
+                current.Store.Dispose();
+                _open.Remove(productId);
+            }
+            if (path == null) return null;
+            var store = SqliteIndexStore.OpenReadOnly(path);
+            var opened = new OpenIndex { Path = path, Store = store, Retriever = new HybridRetriever(store, embedder), Embedder = embedder };
+            _open[productId] = opened;
+            return opened;
+        }
+
+        private static IEnumerable<KnowledgeChunk> Fuse(List<List<KeyValuePair<string, StoredChunk>>> rankings)
+        {
+            var scores = new Dictionary<string, double>();
+            var chunks = new Dictionary<string, KeyValuePair<string, StoredChunk>>();
+            var order = new Dictionary<string, int>();
+            foreach (var ranking in rankings)
+            {
+                for (int i = 0; i < ranking.Count; i++)
+                {
+                    var key = ranking[i].Key + "#" + ranking[i].Value.Id;
+                    scores.TryGetValue(key, out var s);
+                    scores[key] = s + 1.0 / (RrfK + i + 1);
+                    if (!chunks.ContainsKey(key))
+                    {
+                        chunks[key] = ranking[i];
+                        order[key] = order.Count;
+                    }
+                }
+            }
+            return scores
+                .OrderByDescending(p => p.Value)
+                .ThenBy(p => order[p.Key])
+                .Select(p =>
+                {
+                    var k = ToKnowledge(chunks[p.Key].Key, chunks[p.Key].Value);
+                    k.Score = p.Value;
+                    return k;
+                });
+        }
+
+        private static KnowledgeChunk ToKnowledge(string productId, StoredChunk c) => new KnowledgeChunk
+        {
+            ProductId = productId,
+            SourceFile = c.RelativePath,
+            Title = c.Title,
+            Page = c.Page,
+            Text = c.Text,
+            IsReplyExample = c.DocType == DocType.Reply,
+            Score = c.Score,
+        };
+
+        public void Dispose()
+        {
+            lock (_lock)
+            {
+                foreach (var index in _open.Values) index.Store.Dispose();
+                _open.Clear();
+                foreach (var embedder in _embedders.Values.OfType<IDisposable>()) embedder.Dispose();
+                _embedders.Clear();
+            }
+        }
+    }
+}
