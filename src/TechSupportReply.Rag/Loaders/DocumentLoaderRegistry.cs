@@ -21,6 +21,9 @@ namespace TechSupportReply.Rag.Loaders
             new TextLoader(),
             new MarkdownLoader(),
             new CsvLoader(),
+            new PdfLoader(),
+            new DocxLoader(),
+            new XlsxLoader(),
         });
 
         public IReadOnlyCollection<string> SupportedExtensions => _byExtension.Keys;
