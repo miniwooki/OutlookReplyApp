@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Threading;
 using TechSupportReply.Rag.Embedding;
 using TechSupportReply.Rag.Loaders;
@@ -86,7 +85,7 @@ namespace TechSupportReply.Rag.Indexing
                     string hash;
                     try
                     {
-                        hash = Sha256(file.FullName);
+                        hash = FileHash.Sha256(file.FullName);
                     }
                     catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
                     {
@@ -179,13 +178,6 @@ namespace TechSupportReply.Rag.Indexing
             var baseDir = Path.GetFullPath(root).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
             var full = Path.GetFullPath(fullPath);
             return full.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase) ? full.Substring(baseDir.Length) : Path.GetFileName(full);
-        }
-
-        private static string Sha256(string path)
-        {
-            using (var sha = SHA256.Create())
-            using (var stream = File.OpenRead(path))
-                return string.Concat(sha.ComputeHash(stream).Select(b => b.ToString("x2")));
         }
     }
 }
