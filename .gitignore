@@ -17,3 +17,7 @@ models/
 
 # superpowers 작업 공간
 .superpowers/
+
+# Python 도구 가상환경
+tools/.venv/
+__pycache__/
