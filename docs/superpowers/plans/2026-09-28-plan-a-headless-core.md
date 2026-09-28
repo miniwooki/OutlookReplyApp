@@ -3420,6 +3420,205 @@ git commit -m "feat(rag): 한글 bigram 기반 검색 용어 정규화기"
 
 ---
 
-### Task 11+ (작성 예정)
+> **Task 11–24 작성 방식:** 이전 세션이 Task 10까지 쓰고 중단되어, 나머지는 Task 1–10 실행 결과(실제 패키지 버전, net48 네이티브 DLL 문제 등)를 반영해 이어서 작성했다. 각 Task는 파일, 인터페이스, **이름이 정해진 실패 테스트 목록**과 기대 결과를 고정하고, 구현 코드는 TDD로 작성한다(테스트 → 실패 확인 → 구현 → 통과 → 커밋). 커밋 메시지는 `feat(<영역>): <요약>` 형식.
 
-Task 11 이후(로더·청킹·저장소·검색·색인 빌더·게시·동기화·KnowledgeRetriever·PromptBuilder·ReplyGenerator·Indexer CLI)는 Task 1–10 실행 후 이 문서에 이어서 작성한다.
+### Task 11: 텍스트 계열 로더 (txt · md · csv, CP949 판별)
+
+**Files:**
+- Create: `src/TechSupportReply.Rag/Loaders/LoadedDocument.cs`, `DocumentLoadException.cs`, `IDocumentLoader.cs`, `DocumentLoaderRegistry.cs`, `TextFileReader.cs`, `TextLoader.cs`, `MarkdownLoader.cs`, `CsvLoader.cs`
+- Test: `tests/TechSupportReply.Tests/Rag/Loaders/TextFileReaderTests.cs`, `TextLoadersTests.cs`, `DocumentLoaderRegistryTests.cs`
+- 패키지: `System.Text.Encoding.CodePages` (Rag)
+
+**Interfaces:**
+- Produces: `enum DocKind { Pdf, Word, Markdown, Text, Table, Email }`; `LoadedSection { string Title; int? Page; string Text }`; `LoadedDocument { string Path; DocKind Kind; string Title; List<LoadedSection> Sections }`.
+- Produces: `DocumentLoadException(string path, string reason, Exception inner = null)`, `string Reason`, `string FilePath` (Message = `"{파일명}: {reason}"`).
+- Produces: `interface IDocumentLoader { IReadOnlyCollection<string> Extensions { get; } LoadedDocument Load(string path); }` (확장자는 소문자, 점 포함).
+- Produces: `DocumentLoaderRegistry(IEnumerable<IDocumentLoader>)`, `static CreateDefault()`, `bool CanLoad(string path)`, `LoadedDocument Load(string path)`(지원하지 않는 형식·로더 예외는 모두 `DocumentLoadException`), `IReadOnlyCollection<string> SupportedExtensions`. Task 11 시점의 기본값은 txt/log/md/csv/tsv이며 Task 12–13에서 추가한다.
+- Produces: `TextFileReader.Decode(byte[])`(BOM → 엄격한 UTF-8 → CP949 순), `TextFileReader.ReadAllText(string path)`.
+- Produces: `CsvParser.Parse(string text)` → `List<string[]>`(RFC 4180 따옴표, 구분자 `,`/`\t`/`;` 자동 판별), `TableSections.FromRows(IReadOnlyList<string[]> rows, string title)` → 행마다 `"헤더: 값"`을 줄바꿈으로 연결한 섹션(빈 값·빈 행 생략, 제목 `"{title} #{행번호}"`).
+
+**Tests (모두 먼저 작성 → 빌드 실패 확인):**
+- `TextFileReaderTests`: `Decode_Utf8Bom`, `Decode_Utf8NoBom`, `Decode_Utf16LeBom`, `Decode_Cp949`(“접촉 관통 경고” CP949 바이트 → 원문), `Decode_Empty`.
+- `TextLoadersTests`: `TextLoader_SingleSectionWithFileTitle`, `MarkdownLoader_SplitsByHeadings`(머리말 앞 텍스트는 파일 제목 섹션), `MarkdownLoader_NoHeadings_SingleSection`, `CsvParser_QuotedFieldsWithCommaAndNewline`, `CsvParser_DetectsTabDelimiter`, `CsvLoader_RowsBecomeHeaderValueSections`, `CsvLoader_Cp949WithQuotedFields`, `CsvLoader_HeaderOnly_NoSections`.
+- `DocumentLoaderRegistryTests`: `CanLoad_ByExtensionCaseInsensitive`, `Load_Unsupported_ThrowsDocumentLoadException`, `Load_LoaderThrows_WrapsWithReason`.
+
+Run: `dotnet test tests/TechSupportReply.Tests --filter "FullyQualifiedName~Rag.Loaders"` → Expected: PASS 16.
+
+### Task 12: PDF · DOCX · XLSX 로더와 픽스처
+
+**Files:**
+- Create: `tools/make_fixtures.py`, `tests/TechSupportReply.Tests/Fixtures/docs/*`(스크립트 생성물: `manual.pdf`, `encrypted.pdf`, `scanned.pdf`, `corrupt.pdf`, `guide.docx`, `issues.xlsx`, `reply.eml`, `reply_html.eml`, `notes_cp949.txt`, `issues_cp949.csv`)
+- Create: `src/TechSupportReply.Rag/Loaders/PdfLoader.cs`, `DocxLoader.cs`, `XlsxLoader.cs`
+- Modify: `DocumentLoaderRegistry.CreateDefault()`에 pdf/docx/xlsx 추가
+- Test: `tests/TechSupportReply.Tests/Rag/Loaders/OfficePdfLoadersTests.cs`
+- 패키지: `UglyToad.PdfPig`, `DocumentFormat.OpenXml` (Rag)
+
+**Interfaces:**
+- `PdfLoader`: 페이지마다 섹션 1개(`Page` = 1부터), 텍스트 없는 페이지는 생략. 암호 PDF → `DocumentLoadException("암호로 보호된 PDF입니다")`, 모든 페이지에 텍스트가 없으면 `"텍스트가 없는 PDF입니다(스캔 이미지로 추정)"`, 파싱 실패 → `"PDF를 읽을 수 없습니다: ..."`.
+- `DocxLoader`: 제목 스타일(styleId가 `Heading*`/`제목*` 또는 `Title`)에서 섹션을 나누고, 표 행은 셀을 ` | `로 연결한다.
+- `XlsxLoader`: 시트마다 첫 비어 있지 않은 행을 머리글로 삼아 `TableSections.FromRows`(제목 `"{시트명}"`) 적용. 공유 문자열·인라인 문자열·숫자 셀 처리.
+
+**Tests:** `PdfLoader_ReadsPagesWithPageNumbers`, `PdfLoader_Encrypted_ThrowsWithReason`, `PdfLoader_Scanned_ThrowsNoText`, `PdfLoader_Corrupt_ThrowsReadable`, `DocxLoader_SplitsByHeadingAndReadsTables`, `XlsxLoader_RowsBecomeSections`, `Registry_Default_SupportsOfficeAndPdf`.
+
+Run: `dotnet test ... --filter "FullyQualifiedName~OfficePdfLoadersTests"` → Expected: PASS 7.
+
+### Task 13: 메일 파일 로더 (.eml · .msg)
+
+**Files:**
+- Create: `src/TechSupportReply.Rag/Loaders/HtmlText.cs`, `EmailLoader.cs`(`MailFileContent`, `MailFileReader` 포함), `tools/make_msg.ps1`
+- Modify: `DocumentLoaderRegistry.CreateDefault()`에 eml/msg 추가
+- Test: `tests/TechSupportReply.Tests/Rag/Loaders/EmailLoaderTests.cs`
+- 패키지: `MsgReader` (Rag)
+
+**Interfaces:**
+- `HtmlText.ToPlainText(string html)`: script/style 제거, `<br>`·`</p>`·`</div>`·`</tr>` → 줄바꿈, 태그 제거, HTML 엔티티 복원, 과도한 빈 줄 정리.
+- `MailFileContent { string Subject; string From; DateTime? Date; string Body }`, `MailFileReader.Read(string path)`(.eml은 `MsgReader.Mime.Message`, .msg는 `MsgReader.Outlook.Storage.Message`; 텍스트 본문이 없으면 HTML 본문을 변환).
+- `EmailLoader`: 1통 = 섹션 1개. `EmailTextCleaner.Split`로 최신 작성분(= 과거 답변)과 인용분을 나누고, 인용분을 다시 `Split`해 **직전 메일 1통(= 고객 질문)**만 남긴다. 최신 작성분은 서명 구분선(`-- `) 이후를 제거한다. 섹션 텍스트: `"질문:\n{질문}\n\n답변:\n{답변}"`(질문이 없으면 답변만), 제목은 메일 제목. `Kind = Email`.
+
+**Tests:** `HtmlText_StripsTagsAndDecodesEntities`, `Eml_PlainText_SplitsQuestionAndAnswer`, `Eml_HtmlOnly_ConvertsToText`, `Eml_RemovesOlderThreadAndSignature`, `Msg_ReadsSubjectAndBody`(**SkippableFact**: `Fixtures/docs/reply.msg`가 없으면 건너뜀 — .msg는 Outlook COM(`tools/make_msg.ps1`)으로만 만들 수 있어 자동 생성하지 않는다).
+
+Run: `dotnet test ... --filter "FullyQualifiedName~EmailLoaderTests"` → Expected: PASS 4, Skipped 1(.msg 픽스처 없을 때).
+
+### Task 14: 청킹
+
+**Files:** Create `src/TechSupportReply.Rag/Indexing/Chunker.cs`; Test `tests/TechSupportReply.Tests/Rag/Indexing/ChunkerTests.cs`
+
+**Interfaces:**
+- `ChunkDraft { string Title; int? Page; string Text }`, `Chunker(int maxChars = 1500, int overlapChars = 200)`, `List<ChunkDraft> Chunk(LoadedDocument doc)`.
+- 규칙: 공백만 있는 섹션 제외. Email 섹션은 항상 1청크(4,000자 초과분은 `[... 이하 N자 생략 ...]`로 자름). 그 밖의 섹션은 `maxChars` 이하면 그대로, 넘으면 문단(`\n\n`) → 줄 → 문장(`. `, `다. `, `? `, `! `) → 글자 경계 순으로 나누고 앞 청크 끝 `overlapChars`만큼을 다음 청크 앞에 겹친다. 제목·페이지는 원 섹션 값을 유지한다(1,500자 ≈ bge-m3 512토큰 이내, 스펙의 약 600토큰/80토큰 겹침에 해당).
+
+**Tests:** `ShortSection_OneChunk`, `EmptySections_Skipped`, `LongSection_SplitsWithinMaxAndOverlaps`, `SplitPrefersParagraphBoundary`, `PageAndTitle_Preserved`, `EmailSection_SingleChunkEvenIfLong`, `NoParagraphs_HardSplitsByLength`.
+
+Run: `--filter "FullyQualifiedName~ChunkerTests"` → Expected: PASS 7.
+
+### Task 15: SQLite 색인 저장소 (FTS5 + 벡터 BLOB)
+
+**Files:** Create `src/TechSupportReply.Rag/Store/StoreTypes.cs`, `SqliteIndexStore.cs`; Test `tests/TechSupportReply.Tests/Rag/Store/SqliteIndexStoreTests.cs`
+- 패키지: `Microsoft.Data.Sqlite` (Rag). net48 실행 프로젝트(Tests, Indexer)에서 `e_sqlite3.dll`이 출력 폴더에 없으면 Task 3과 같은 방식으로 `SQLitePCLRaw.bundle_e_sqlite3`를 직접 참조한다.
+
+**Interfaces:**
+- `enum DocType { Reference, Reply }`; `IndexedFile { long Id; string RelativePath; long Size; DateTime MtimeUtc; string Hash }`; `NewChunk { DocType DocType; string Title; int? Page; string Text; float[] Vector }`; `StoredChunk { long Id; string RelativePath; DocType DocType; string Title; int? Page; string Text; double Score }`.
+- `SqliteIndexStore : IDisposable` — `static Create(string path)`(스키마 생성, 읽기/쓰기), `static OpenReadOnly(string path)`, `GetMeta/SetMeta(key, value)`, `IReadOnlyList<IndexedFile> GetFiles()`, `void UpsertFile(string relativePath, long size, DateTime mtimeUtc, string hash, IReadOnlyList<NewChunk> chunks)`(트랜잭션으로 기존 청크 교체), `void TouchFile(string relativePath, long size, DateTime mtimeUtc)`, `void RemoveFile(string relativePath)`, `int ChunkCount`, `IReadOnlyList<StoredChunk> SearchKeyword(string text, int topK, DocType? type = null)`(BM25, Score = -bm25), `IReadOnlyList<KeyValuePair<long, float[]>> LoadVectors(DocType? type = null)`, `IReadOnlyList<StoredChunk> GetChunks(IEnumerable<long> ids)`(입력 순서 유지).
+- 스키마: `meta(key PK, value)`, `files(id, path UNIQUE, size, mtime_ticks, hash)`, `chunks(id, file_id, doc_type, title, page, text)`, `vectors(chunk_id PK, blob)`, `chunks_fts USING fts5(terms, tokenize="unicode61 remove_diacritics 0 tokenchars '_'")`(rowid = chunk id, terms = `SearchTextNormalizer.ToIndexText(title + text)`). 연결 문자열은 항상 `Pooling=False`.
+
+**Tests:** `Create_ThenReopenReadOnly_KeepsMeta`, `UpsertFile_ReplacesChunks`, `RemoveFile_DeletesChunksVectorsAndFts`, `SearchKeyword_FindsKeywordCard`(`*CONTACT_AUTOMATIC_SURFACE_TO_SURFACE` 청크를 `contact_automatic_surface_to_surface`와 `contact`로 검색), `SearchKeyword_FindsKoreanTwoSyllableTerm`(“접촉”, “수렴”), `SearchKeyword_FilterByDocType`, `SearchKeyword_StopWordsOnly_ReturnsEmpty`, `LoadVectors_RoundTrips`, `OpenReadOnly_WriteThrows`.
+
+Run: `--filter "FullyQualifiedName~SqliteIndexStoreTests"` → Expected: PASS 9.
+
+### Task 16: RRF와 하이브리드 검색기
+
+**Files:** Create `src/TechSupportReply.Rag/Search/Rrf.cs`, `HybridRetriever.cs`, `tests/TechSupportReply.Tests/TestSupport/FakeEmbedder.cs`; Test `tests/TechSupportReply.Tests/Rag/Search/HybridRetrieverTests.cs`
+
+**Interfaces:**
+- `Rrf.Fuse(IEnumerable<IReadOnlyList<long>> rankings, int k = 60)` → `List<KeyValuePair<long, double>>`(점수 내림차순, 동점은 먼저 나온 순위 우선).
+- `HybridRetriever(SqliteIndexStore store, IEmbedder embedder)`(embedder는 null 가능), `bool VectorEnabled`(embedder가 있고 meta `embedding_model`·`dimension`이 일치), `string DisabledReason`, `IReadOnlyList<StoredChunk> Search(string query, int topK, DocType? type = null, int candidatePool = 30)` — BM25 top N + 코사인 top N(벡터는 최초 검색 시 메모리에 적재, 브루트포스) → RRF. Score = RRF 점수.
+- Produces(테스트): `FakeEmbedder : IEmbedder`(ModelId `"fake"`, Dimension 16, 단어 해시 기반 결정적 벡터 — 같은 단어를 공유하면 코사인이 높다).
+
+**Tests:** `Rrf_CombinesRankings`, `Rrf_ItemInBothListsWins`, `Search_KeywordOnly_WhenNoEmbedder`, `Search_VectorFindsSemanticMatchWithoutKeywordOverlap`(키워드는 겹치지 않고 벡터로만 찾는 청크가 결과에 포함), `Search_ModelMismatch_DisablesVectorWithReason`, `Search_TypeFilter`.
+
+Run: `--filter "FullyQualifiedName~HybridRetrieverTests"` → Expected: PASS 6.
+
+### Task 17: 색인 빌더 (증분 색인)
+
+**Files:** Create `src/TechSupportReply.Rag/Indexing/KbLayout.cs`, `IndexBuilder.cs`; Test `tests/TechSupportReply.Tests/Rag/Indexing/KbLayoutTests.cs`, `IndexBuilderTests.cs`
+
+**Interfaces:**
+- `KbLayout`: 상수 `IndexFolder = "_index"`, `ModelsFolder = "_models"`, `ManifestFileName = "manifest.json"`, `ProductsFileName = "products.json"`; `ProductDir(root, ProductDefinition)`, `IndexDir(root)`, `IndexFile(root, productId)`(`_index\{id}.sqlite`), `ManifestPath(root)`, `ProductsPath(root)`, `PromptPath(root, ProductDefinition)`, `ModelDir(root, modelId)`; `DocType DocTypeFor(string relativePath)`(첫 경로 조각이 `replies`면 Reply), `bool IsIgnored(string relativePath)`(`_prompt.md`, `~$`·`.`으로 시작하는 파일, `_`로 시작하는 하위 폴더).
+- `SkippedFile { string RelativePath; string Reason }`; `IndexBuildReport { string ProductId; int Added; int Updated; int Removed; int Unchanged; int FileCount; int ChunkCount; List<SkippedFile> Skipped; TimeSpan Elapsed }`.
+- `IndexBuilder(DocumentLoaderRegistry loaders, Chunker chunker, IEmbedder embedder)`, `IndexBuildReport Build(string productId, string productDir, string indexPath, bool full, IProgress<string> progress, CancellationToken ct)` — 지원 확장자만 대상, 크기·mtime이 같으면 건너뜀, 다르면 SHA-256 비교(같으면 `TouchFile`), 사라진 파일 제거, meta(`embedding_model`, `dimension`, `product_id`, `built_at`) 기록. meta 모델이 다르거나 `full`이면 새 파일로 다시 만든다. 읽을 수 없는 파일은 `Skipped`에 사유와 함께 넣고 계속한다. 폴더가 없으면 빈 색인.
+
+**Tests:** `KbLayout_DocTypeFor_Replies`, `KbLayout_IsIgnored`, `Build_IndexesSupportedFiles_WithDocTypes`, `Build_Incremental_UnchangedSkipped_ChangedUpdated_DeletedRemoved`, `Build_SameContentNewMtime_CountsUnchanged`, `Build_CorruptFiles_SkippedWithReasonOthersIndexed`, `Build_ModelChanged_RebuildsAll`, `Build_MissingFolder_EmptyIndex`.
+
+Run: `--filter "FullyQualifiedName~KbLayoutTests|FullyQualifiedName~IndexBuilderTests"` → Expected: PASS 8.
+
+### Task 18: 매니페스트와 색인 게시
+
+**Files:** Create `src/TechSupportReply.Rag/Indexing/IndexManifest.cs`, `IndexPublisher.cs`; Test `tests/TechSupportReply.Tests/Rag/Indexing/IndexPublisherTests.cs`
+
+**Interfaces:**
+- `ProductIndexInfo { string ProductId; string File; int Version; string Sha256; DateTime BuiltAtUtc; int FileCount; int ChunkCount }`; `IndexManifest { int SchemaVersion = 1; string EmbeddingModel; int Dimension; List<ProductIndexInfo> Products; ProductIndexInfo Find(string productId); static IndexManifest Load(string path)`(없으면 null, 형식 오류면 `InvalidDataException`)`; void Save(string path)`(원자적) `}`.
+- `IndexPublisher(string ragRoot)`, `string PrepareWorkingCopy(string productId, string workDir)`(공유 색인이 있으면 작업 폴더로 복사해 증분 빌드에 쓰고, 경로 반환), `ProductIndexInfo Publish(string productId, string workingIndexPath, string embeddingModel, int dimension, IndexBuildReport report)` — `_index\{id}.sqlite.tmp`로 복사 → `AtomicFile.Replace` → 매니페스트 갱신(버전 +1, SHA-256, 빌드 시각, 개수). 다른 제품 항목은 보존한다.
+
+**Tests:** `Manifest_SaveLoad_RoundTrip`, `Manifest_Load_Missing_ReturnsNull`, `Publish_First_CreatesIndexAndManifestVersion1`, `Publish_Again_IncrementsVersionKeepsOtherProducts`, `PrepareWorkingCopy_CopiesExistingSharedIndex`.
+
+Run: `--filter "FullyQualifiedName~IndexPublisherTests"` → Expected: PASS 5.
+
+### Task 19: 공유 폴더 → 로컬 캐시 동기화
+
+**Files:** Create `src/TechSupportReply.Rag/Sync/IndexCacheSync.cs`; Test `tests/TechSupportReply.Tests/Rag/Sync/IndexCacheSyncTests.cs`
+
+**Interfaces:**
+- `SyncResult { bool SharedReachable; List<string> UpdatedProducts; List<string> Warnings; IndexManifest LocalManifest }`.
+- `IndexCacheSync(string ragRoot, string cacheDir)`, `static string DefaultCacheDir`(`%LOCALAPPDATA%\TechSupportReply\cache`), `SyncResult Sync(IEnumerable<string> productIds, CancellationToken ct)`, `string LocalIndexPath(string productId)`, `string LocalProductsPath`, `string LocalPromptPath(string productId)`, `IndexManifest LoadLocalManifest()`, `string EnsureModel(string modelId, CancellationToken ct)`(공유 `_models\{id}`를 캐시로 복사, 이미 있으면 그대로; 없으면 null).
+- 동작: 공유 매니페스트의 버전·SHA-256이 로컬 매니페스트와 다를 때만 복사(`.tmp` → SHA-256 검증 → 교체). `products.json`과 제품별 `_prompt.md`도 캐시에 복사한다. 공유 폴더에 접근할 수 없거나 매니페스트가 없으면 예외 없이 `SharedReachable=false`와 한국어 경고를 반환하고 캐시를 그대로 둔다. 복사 중 SHA-256 불일치는 해당 제품만 경고.
+
+**Tests:** `Sync_CopiesNewIndexAndPromptFiles`, `Sync_SameVersion_DoesNotCopyAgain`, `Sync_NewVersion_ReplacesCachedIndex`, `Sync_SharedUnreachable_KeepsCacheAndWarns`, `Sync_SharedUnreachable_NoCache_WarnsNoThrow`, `Sync_HashMismatch_WarnsAndKeepsOld`, `EnsureModel_CopiesOnce`.
+
+Run: `--filter "FullyQualifiedName~IndexCacheSyncTests"` → Expected: PASS 7.
+
+### Task 20: KnowledgeRetriever (IKnowledgeRetriever 구현)
+
+**Files:** Create `src/TechSupportReply.Rag/KnowledgeRetriever.cs`; Test `tests/TechSupportReply.Tests/Rag/KnowledgeRetrieverTests.cs`
+
+**Interfaces:**
+- `KnowledgeRetriever(IndexCacheSync sync, ProductCatalog catalog, Func<IndexManifest, IEmbedder> embedderFactory, TimeSpan? syncInterval = null) : IKnowledgeRetriever, IDisposable` — `embedderFactory`는 매니페스트의 모델로 임베더를 만들거나 null(모델 없음)을 반환한다. `RetrieveAsync`는 백그라운드 스레드에서: 마지막 동기화 후 `syncInterval`(기본 10분)이 지났으면 해당 제품+`_common`을 동기화 → 로컬 색인을 읽기 전용으로 열어(제품별로 캐시, 새 버전이면 다시 엶) 근거(Reference: 선택 제품 + `_common`을 각각 검색해 RRF 병합, top `referenceTopK`)와 문체 예시(Reply: 선택 제품만, top `styleTopK`)를 `KnowledgeChunk`로 반환한다. 동기화 경고, 색인 없음(`"'{표시명}' 지식 색인이 없어 RAG 없이 생성합니다."`), 벡터 비활성 사유를 `Warnings`에 넣는다. 취소는 전파한다.
+
+**Tests:** `Retrieve_ReturnsReferencesFromProductAndCommon_AndStyleExamples`, `Retrieve_ProductChanged_ReturnsDifferentEvidence`, `Retrieve_SharedUnreachableAndNoCache_ReturnsEmptyWithWarning`, `Retrieve_SharedUnreachable_UsesCachedIndex`, `Retrieve_NoEmbedder_KeywordOnlyWithWarning`.
+
+Run: `--filter "FullyQualifiedName~KnowledgeRetrieverTests"` → Expected: PASS 5.
+
+### Task 21: 프롬프트 빌더
+
+**Files:** Create `src/TechSupportReply.Core/Prompting/PromptBuilder.cs`; Test `tests/TechSupportReply.Tests/Core/Prompting/PromptBuilderTests.cs`
+
+**Interfaces:**
+- `PromptInput { MailSnapshot Mail; ProductDefinition Product; string ProductGuide; UserProfile User; RetrievalResult Retrieval; string ExtraInstruction; int MaxMailChars = 30000; int MaxAttachmentChars = 20000 }`; `BuiltPrompt { LlmRequest Request; List<string> Warnings }`; `static BuiltPrompt PromptBuilder.Build(PromptInput input)`.
+- `CachedSystem` = 공통 지침(KOSTECH 기술지원 엔지니어 역할, 원문 언어로 답변, 근거에 없는 키워드 옵션·수치를 지어내지 말 것, 불확실한 부분은 `[확인 필요]`, 정보가 부족하면 필요한 파일(d3hsp, messag, 버전, 라이선스 로그 등) 요청, 인사말/맺음말 형식, 본문만 일반 텍스트로 출력하고 서명·인용은 쓰지 말 것) + `## 제품 지침 ({표시명})` + `_prompt.md` 전문(없으면 “별도 지침 없음”). 제품별로 고정되어 캐시된다.
+- `System` = 작성자 정보(이름·직함·회사·어조).
+- 사용자 메시지 1개: `## 문체 예시(과거 답변)` → `## 참고 자료`(각 청크 앞에 `[출처: {Citation}]`, 없으면 “참고 자료 없음” 안내) → `## 고객 메일`(제목, 보낸 사람, 받은 날짜, 첨부 이름, 본문) → `## 첨부 텍스트`(있을 때) → `## 추가 지시`(있을 때) → 답변 작성 요청. 본문·첨부가 한도를 넘으면 앞부분만 남기고 `[... 이하 N자 생략 ...]`을 붙이며 한국어 경고를 추가한다.
+
+**Tests:** `Build_CachedSystemContainsRulesAndProductGuide`, `Build_SameProduct_CachedSystemIdenticalAcrossMails`, `Build_ReferencesHaveCitations`, `Build_NoReferences_AddsNoEvidenceNotice`, `Build_StyleExamplesIncluded`, `Build_ExtraInstructionIncluded`, `Build_LongBody_TruncatesWithMarkerAndWarning`, `Build_LongAttachment_TruncatesWithWarning`, `Build_UserProfileInSystem`.
+
+Run: `--filter "FullyQualifiedName~PromptBuilderTests"` → Expected: PASS 9.
+
+### Task 22: 답변 생성기
+
+**Files:** Create `src/TechSupportReply.Core/Generation/ReplyGenerator.cs`, `tests/TechSupportReply.Tests/TestSupport/FakeRetriever.cs`; Test `tests/TechSupportReply.Tests/Core/Generation/ReplyGeneratorTests.cs`
+
+**Interfaces:**
+- `ReplyRequest { MailSnapshot Mail; string ProductId; string ExtraInstruction; bool UseRag = true }`; `ReplyResult { string Text; string ProductId; List<KnowledgeChunk> References; List<string> Warnings }`.
+- `ReplyGenerator(ProductCatalog catalog, IKnowledgeRetriever retriever, Func<ProductDefinition, string> productGuideLoader, AppSettings settings)`(retriever는 null 가능), `Task<ReplyResult> GenerateAsync(ReplyRequest request, ILlmProvider llm, Action<string> onDelta, CancellationToken ct)` — 질의 = 제목 + 최신 본문 앞 1,000자. 검색 → 프롬프트 → `StreamAsync`. 검색 예외(취소 제외)는 경고로 바꾸고 RAG 없이 계속한다. 알 수 없는 제품 id는 `_common`으로 대체하고 경고. LLM 예외는 그대로 전파(UI가 `UserMessage` 표시).
+- Produces(테스트): `FakeRetriever { RetrievalResult Result; Exception Throw; List<(string ProductId, string Query)> Calls }`.
+
+**Tests:** `Generate_StreamsAndReturnsText`, `Generate_UsesSelectedProductForRetrievalAndGuide`, `Generate_RetrieverThrows_WarnsAndStillGenerates`, `Generate_UseRagFalse_SkipsRetrieval`, `Generate_UnknownProduct_FallsBackToCommonWithWarning`, `Generate_LlmError_Propagates`, `Generate_Cancellation_Propagates`.
+
+Run: `--filter "FullyQualifiedName~ReplyGeneratorTests"` → Expected: PASS 7.
+
+### Task 23: Indexer CLI
+
+**Files:** Create `src/TechSupportReply.Indexer/CliArgs.cs`, `ConsoleProgress.cs`, `KbTemplates.cs`, `Commands/InitKbCommand.cs`, `IndexCommand.cs`, `SearchCommand.cs`, `ReplyCommand.cs`; Modify `Program.cs`; Test `tests/TechSupportReply.Tests/Indexer/CliArgsTests.cs`, `IndexerCommandsTests.cs`
+
+**Interfaces:**
+- `CliArgs.Parse(string[] args)` → `Command`(첫 인수, 소문자), `string Get(string name, string defaultValue = null)`, `string Require(string name)`(없으면 `CliException("--{name} 옵션이 필요합니다.")`), `bool Has(string flag)`, `int GetInt(name, default)`.
+- 명령(모두 `int Run(CliArgs args, TextWriter output)`; 테스트용으로 임베더 팩토리를 주입할 수 있다):
+  - `init-kb --root <경로>`: 폴더 구조(제품 폴더마다 `manuals`, `replies`, `faq`, `issues`, `_index`, `_models`)와 `products.json`, 제품별 `_prompt.md` 템플릿(`KbTemplates`), `README.md` 생성. 이미 있는 파일은 덮어쓰지 않는다.
+  - `index --root <경로> [--product <id>] [--full] [--model <모델 폴더>] [--work <작업 폴더>]`: 제품마다 `PrepareWorkingCopy` → `IndexBuilder.Build` → `Publish`, 요약(추가/갱신/삭제/유지/청크/건너뜀과 사유, 소요 시간) 출력. 모델 기본값은 `TSR_MODEL_DIR` 또는 `{root}\_models\bge-m3-int8`.
+  - `search --root <경로> --product <id> --query <텍스트> [--top 8] [--cache <폴더>]`: 동기화 후 근거와 문체 예시를 점수·출처와 함께 출력.
+  - `reply --root <경로> --mail <파일(.txt/.eml/.msg)> [--product <id>] --provider anthropic|openai --model <모델> [--base-url <url>]`: API 키는 환경 변수(`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`)에서만 읽는다. 분류(제품 미지정 시) → 검색 → 스트리밍 출력 → 참고 문서·경고 출력.
+- `Program.Main`: 콘솔 UTF-8, 도움말(`help`/인수 없음), 종료 코드 0=성공, 1=오류(한국어 메시지), 2=사용법 오류.
+
+**Tests:** `CliArgs_ParsesCommandOptionsAndFlags`, `CliArgs_Require_MissingThrows`, `InitKb_CreatesStructureWithoutOverwriting`, `Index_ThenSearch_EndToEndWithFakeEmbedder`, `Index_ReportsSkippedFiles`, `Program_UnknownCommand_Returns2`.
+
+Run: `--filter "FullyQualifiedName~Indexer"` → Expected: PASS 6.
+
+### Task 24: 샘플 지식 폴더와 실제 모델 E2E 검증
+
+**Files:** Create `samples/kb/**`(`products.json`, `LS-DYNA\_prompt.md`, `LS-DYNA\faq\*.md`, `LS-DYNA\issues\*.csv`, `LS-DYNA\replies\*.eml` 2통, `Ansys-Fluent\...` 같은 구성, `_common\faq\license.md`; PDF 매뉴얼은 `tools/make_fixtures.py --samples`로 생성), `samples/mails/lsdyna_contact.txt`, `samples/mails/fluent_divergence.txt`, `tools/e2e_samples.sh`
+
+**검증(수동 실행, 결과를 ledger에 기록):**
+1. `bash tools/e2e_samples.sh` → 샘플 KB를 임시 폴더로 복사하고 실제 bge-m3 모델로 `index` 실행 → `_index\manifest.json`과 제품별 `.sqlite` 생성 확인.
+2. 같은 질의로 `search --product ls-dyna`와 `--product ansys-fluent`를 실행해 근거가 제품별로 달라지는지 확인.
+3. 공유 폴더 경로를 없는 경로로 바꿔 `search`를 다시 실행하면 캐시 색인으로 결과가 나오고 경고가 출력되는지 확인.
+4. (키가 있을 때만) `reply`로 실제 답변 스트리밍 확인.
+
+Expected: 1–3 성공. 4는 키가 없으면 건너뛰고 사용자 보고에 적는다.
