@@ -5,4 +5,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="TechSupportReply.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
+    <PackageReference Include="System.Text.Json" Version="10.0.12" />
+  </ItemGroup>
 </Project>
