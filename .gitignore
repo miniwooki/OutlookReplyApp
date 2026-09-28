@@ -1,0 +1,16 @@
+# Visual Studio / .NET
+.vs/
+bin/
+obj/
+*.user
+*.suo
+packages/
+TestResults/
+publish/
+*.pfx
+
+# 로컬 모델/색인 산출물
+models/
+*.onnx
+*.onnx_data
+*.sqlite
