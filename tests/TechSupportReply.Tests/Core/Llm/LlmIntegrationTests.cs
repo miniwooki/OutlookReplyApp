@@ -62,5 +62,37 @@ namespace TechSupportReply.Tests.Core.Llm
             var ex = await Assert.ThrowsAsync<LlmException>(() => Anthropic("sk-ant-invalid").CompleteAsync(Hello(), CancellationToken.None));
             Assert.Equal(LlmErrorKind.Authentication, ex.Kind);
         }
+
+        private static OpenAiProvider OpenAi(string key, string model) => new OpenAiProvider(new LlmProfile
+        {
+            DisplayName = "it-openai",
+            Provider = LlmProviderKind.OpenAI,
+            Model = model,
+            BaseUrl = Env("OPENAI_TEST_BASE_URL") ?? "",
+        }, key);
+
+        [SkippableFact]
+        public async Task OpenAi_Stream_ReturnsText_AndDeltasMatch()
+        {
+            var key = Env("OPENAI_API_KEY");
+            var model = Env("OPENAI_TEST_MODEL");
+            Skip.If(key == null || model == null, "OPENAI_API_KEY와 OPENAI_TEST_MODEL이 필요합니다");
+            var deltas = new StringBuilder();
+            var text = await OpenAi(key, model).StreamAsync(Hello(), d => deltas.Append(d), CancellationToken.None);
+            Assert.Contains("연결", text);
+            Assert.Equal(text, deltas.ToString());
+        }
+
+        [SkippableFact]
+        public async Task OpenAi_StructuredClassification_Fluent()
+        {
+            var key = Env("OPENAI_API_KEY");
+            var model = Env("OPENAI_TEST_MODEL");
+            Skip.If(key == null || model == null, "OPENAI_API_KEY와 OPENAI_TEST_MODEL이 필요합니다");
+            var mail = Mails.Create("계산 발산 문의", "Fluent에서 residual이 줄지 않고 계산이 발산합니다.");
+            var r = await new ProductClassifier(ProductCatalog.CreateDefault()).ClassifyAsync(mail, OpenAi(key, model), CancellationToken.None);
+            Assert.Equal(ClassificationSource.Llm, r.Source);
+            Assert.Equal("ansys-fluent", r.ProductId);
+        }
     }
 }
