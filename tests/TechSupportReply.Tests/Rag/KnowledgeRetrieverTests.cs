@@ -54,9 +54,97 @@ namespace TechSupportReply.Tests.Rag
             return root;
         }
 
-        private static KnowledgeRetriever Retriever(string root, string cache, bool withEmbedder = true) =>
+        private static KnowledgeRetriever Retriever(string root, string cache, bool withEmbedder = true, TimeSpan? syncInterval = null) =>
             new KnowledgeRetriever(new IndexCacheSync(root, cache), Catalog,
-                m => withEmbedder && m?.EmbeddingModel == FakeEmbedder.Id ? new FakeEmbedder() : (IEmbedder)null);
+                m => withEmbedder && m?.EmbeddingModel == FakeEmbedder.Id ? new FakeEmbedder() : (IEmbedder)null, syncInterval);
+
+        private static string[] CachedIndexFiles(string cache) =>
+            Directory.GetFiles(Path.Combine(cache, "index"), "*.sqlite");
+
+        [Fact]
+        public async Task Retrieve_SameVersionDifferentHash_WhileOldIndexOpen_ServesNewContent()
+        {
+            using (var tmp = new TempDir())
+            {
+                var root = tmp.Sub("kb");
+                PublishProduct(tmp, root, "ls-dyna", new Dictionary<string, string> { [@"faq\a.md"] = "접촉 첫째판" });
+                using (var retriever = Retriever(root, tmp.Sub("cache"), syncInterval: TimeSpan.Zero))
+                {
+                    Assert.Contains("첫째판", (await retriever.RetrieveAsync("ls-dyna", "접촉", 8, 0, CancellationToken.None)).References[0].Text);
+
+                    // 관리자가 _index를 지우고 다시 색인 → 버전은 다시 1, 해시만 다름
+                    Directory.Delete(Path.Combine(root, "_index"), true);
+                    PublishProduct(tmp, root, "ls-dyna", new Dictionary<string, string> { [@"faq\a.md"] = "접촉 둘째판" });
+
+                    var r = await retriever.RetrieveAsync("ls-dyna", "접촉", 8, 0, CancellationToken.None);
+                    Assert.Contains("둘째판", Assert.Single(r.References).Text);
+                    Assert.DoesNotContain(r.Warnings, w => w.Contains("해시"));
+                }
+            }
+        }
+
+        [Fact]
+        public async Task Retrieve_NewVersion_OldCacheFileDeleted()
+        {
+            using (var tmp = new TempDir())
+            {
+                var root = tmp.Sub("kb");
+                var cache = tmp.Sub("cache");
+                PublishProduct(tmp, root, "ls-dyna", new Dictionary<string, string> { [@"faq\a.md"] = "접촉 첫째판" });
+                using (var retriever = Retriever(root, cache, syncInterval: TimeSpan.Zero))
+                {
+                    await retriever.RetrieveAsync("ls-dyna", "접촉", 8, 0, CancellationToken.None);
+                    for (int i = 0; i < 3; i++)
+                    {
+                        PublishProduct(tmp, root, "ls-dyna", new Dictionary<string, string> { [@"faq\a.md"] = "접촉 개정 " + i });
+                        await retriever.RetrieveAsync("ls-dyna", "접촉", 8, 0, CancellationToken.None);
+                    }
+                    Assert.Single(CachedIndexFiles(cache));
+                }
+            }
+        }
+
+        [Fact]
+        public async Task Retrieve_EmbedderUnavailableThenAvailable_RetriesVector()
+        {
+            using (var tmp = new TempDir())
+            {
+                int calls = 0;
+                var sync = new IndexCacheSync(Kb(tmp), tmp.Sub("cache"));
+                using (var retriever = new KnowledgeRetriever(sync, Catalog, m => calls++ == 0 ? null : new FakeEmbedder(), TimeSpan.Zero))
+                {
+                    var first = await retriever.RetrieveAsync("ls-dyna", "접촉", 8, 0, CancellationToken.None);
+                    Assert.Contains(first.Warnings, w => w.Contains("키워드 검색만"));
+                    var second = await retriever.RetrieveAsync("ls-dyna", "접촉", 8, 0, CancellationToken.None);
+                    Assert.DoesNotContain(second.Warnings, w => w.Contains("키워드 검색만"));
+                }
+            }
+        }
+
+        [Fact]
+        public async Task Retrieve_WhileAnotherSyncIsSlow_UsesCacheWithoutWaiting()
+        {
+            using (var tmp = new TempDir())
+            using (var retriever = Retriever(Kb(tmp), tmp.Sub("cache"), syncInterval: TimeSpan.Zero))
+            using (var entered = new ManualResetEventSlim(false))
+            using (var gate = new ManualResetEventSlim(false))
+            {
+                await retriever.RetrieveAsync("ls-dyna", "접촉", 8, 0, CancellationToken.None);
+                retriever.SyncStarting = () =>
+                {
+                    entered.Set();
+                    gate.Wait(TimeSpan.FromSeconds(20));
+                };
+                var slow = retriever.RetrieveAsync("ls-dyna", "접촉", 8, 0, CancellationToken.None);
+                Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+                var fast = retriever.RetrieveAsync("ls-dyna", "접촉", 8, 0, CancellationToken.None);
+                bool finished = fast.Wait(TimeSpan.FromSeconds(3));
+                gate.Set();
+                await slow;
+                Assert.True(finished, "동기화가 진행 중이어도 캐시로 바로 검색해야 합니다.");
+                Assert.NotEmpty(fast.Result.References);
+            }
+        }
 
         [Fact]
         public async Task Retrieve_ReturnsReferencesFromProductAndCommon_AndStyleExamples()

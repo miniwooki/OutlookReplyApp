@@ -32,17 +32,22 @@ namespace TechSupportReply.Rag.Indexing
         public ProductIndexInfo Publish(string productId, string workingIndexPath, string embeddingModel, int dimension, IndexBuildReport report)
         {
             var target = KbLayout.IndexFile(_root, productId);
+            var manifestPath = KbLayout.ManifestPath(_root);
+            var manifest = IndexManifest.Load(manifestPath) ?? new IndexManifest();
+            var previous = manifest.Find(productId);
+            // 내용이 그대로면 버전을 올리지 않는다(클라이언트가 같은 색인을 다시 내려받지 않도록).
+            if (report != null && !report.HasChanges && previous != null && File.Exists(target)
+                && manifest.EmbeddingModel == embeddingModel && manifest.Dimension == dimension)
+                return previous;
+
             Directory.CreateDirectory(Path.GetDirectoryName(target));
             var tmp = target + ".tmp";
             File.Copy(workingIndexPath, tmp, true);
             var hash = FileHash.Sha256(tmp);
             AtomicFile.Replace(tmp, target);
 
-            var manifestPath = KbLayout.ManifestPath(_root);
-            var manifest = IndexManifest.Load(manifestPath) ?? new IndexManifest();
             manifest.EmbeddingModel = embeddingModel;
             manifest.Dimension = dimension;
-            var previous = manifest.Find(productId);
             var info = new ProductIndexInfo
             {
                 ProductId = productId,

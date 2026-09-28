@@ -35,6 +35,7 @@ namespace TechSupportReply.Rag
         private readonly Dictionary<string, OpenIndex> _open = new Dictionary<string, OpenIndex>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, IEmbedder> _embedders = new Dictionary<string, IEmbedder>();
         private readonly object _lock = new object();
+        private readonly object _syncLock = new object();
 
         public KnowledgeRetriever(IndexCacheSync sync, ProductCatalog catalog, Func<IndexManifest, IEmbedder> embedderFactory, TimeSpan? syncInterval = null)
         {
@@ -44,6 +45,9 @@ namespace TechSupportReply.Rag
             _syncInterval = syncInterval ?? TimeSpan.FromMinutes(10);
         }
 
+        /// <summary>테스트용: 공유 폴더 동기화를 시작하기 직전에 호출된다.</summary>
+        internal Action SyncStarting { get; set; }
+
         public Task<RetrievalResult> RetrieveAsync(string productId, string query, int referenceTopK, int styleTopK, CancellationToken ct) =>
             Task.Run(() => Retrieve(productId, query, referenceTopK, styleTopK, ct), ct);
 
@@ -52,9 +56,9 @@ namespace TechSupportReply.Rag
             var result = new RetrievalResult();
             var warnings = new List<string>();
             var ids = new[] { productId, ProductCatalog.CommonId }.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            SyncIfDue(ids, warnings, ct);
             lock (_lock)
             {
-                SyncIfDue(ids, warnings, ct);
                 var embedder = Embedder(_sync.LoadLocalManifest());
 
                 var rankings = new List<List<KeyValuePair<string, StoredChunk>>>();
@@ -81,24 +85,36 @@ namespace TechSupportReply.Rag
             return result;
         }
 
+        /// <summary>
+        /// 동기화(SMB 접근)는 검색 락 밖에서 한 번에 하나만 한다. 다른 스레드가 동기화 중이면 기다리지 않고
+        /// 현재 캐시로 바로 검색한다(VPN 끊김으로 공유 폴더 접근이 오래 걸려도 검색이 멈추지 않도록).
+        /// </summary>
         private void SyncIfDue(List<string> ids, List<string> warnings, CancellationToken ct)
         {
-            var now = DateTime.UtcNow;
-            var due = ids.Where(id => !_lastSync.TryGetValue(id, out var t) || now - t >= _syncInterval).ToList();
-            if (due.Count == 0) return;
-            var sync = _sync.Sync(due, ct);
-            warnings.AddRange(sync.Warnings);
-            foreach (var id in due) _lastSync[id] = now;
+            if (!Monitor.TryEnter(_syncLock)) return;
+            try
+            {
+                var now = DateTime.UtcNow;
+                var due = ids.Where(id => !_lastSync.TryGetValue(id, out var t) || now - t >= _syncInterval).ToList();
+                if (due.Count == 0) return;
+                SyncStarting?.Invoke();
+                var sync = _sync.Sync(due, ct);
+                warnings.AddRange(sync.Warnings);
+                foreach (var id in due) _lastSync[id] = now;
+            }
+            finally
+            {
+                Monitor.Exit(_syncLock);
+            }
         }
 
+        /// <summary>임베더를 모델별로 한 번만 만든다. 만들지 못했으면(모델 복사 실패 등) 다음 검색 때 다시 시도한다.</summary>
         private IEmbedder Embedder(IndexManifest manifest)
         {
             var key = manifest?.EmbeddingModel ?? "";
-            if (!_embedders.TryGetValue(key, out var embedder))
-            {
-                embedder = _embedderFactory(manifest);
-                _embedders[key] = embedder;
-            }
+            if (_embedders.TryGetValue(key, out var cached)) return cached;
+            var embedder = _embedderFactory(manifest);
+            if (embedder != null) _embedders[key] = embedder;
             return embedder;
         }
 
@@ -111,6 +127,7 @@ namespace TechSupportReply.Rag
             {
                 current.Store.Dispose();
                 _open.Remove(productId);
+                _sync.CleanupUnreferenced();
             }
             if (path == null) return null;
             var store = SqliteIndexStore.OpenReadOnly(path);

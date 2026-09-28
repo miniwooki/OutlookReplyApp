@@ -70,5 +70,48 @@ namespace TechSupportReply.Tests.Rag.Loaders
             Assert.True(registry.CanLoad("a.docx"));
             Assert.True(registry.CanLoad("a.xlsx"));
         }
+
+        [Fact]
+        public void XlsxLoader_ManySharedStrings_IsFast()
+        {
+            using (var tmp = new TempDir())
+            {
+                var path = tmp.File("big.xlsx");
+                const int rows = 20000;
+                using (var doc = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Create(path, DocumentFormat.OpenXml.SpreadsheetDocumentType.Workbook))
+                {
+                    var wb = doc.AddWorkbookPart();
+                    wb.Workbook = new DocumentFormat.OpenXml.Spreadsheet.Workbook();
+                    var sst = wb.AddNewPart<DocumentFormat.OpenXml.Packaging.SharedStringTablePart>();
+                    sst.SharedStringTable = new DocumentFormat.OpenXml.Spreadsheet.SharedStringTable();
+                    var ws = wb.AddNewPart<DocumentFormat.OpenXml.Packaging.WorksheetPart>();
+                    var data = new DocumentFormat.OpenXml.Spreadsheet.SheetData();
+                    for (int r = 0; r <= rows; r++)
+                    {
+                        sst.SharedStringTable.AppendChild(new DocumentFormat.OpenXml.Spreadsheet.SharedStringItem(
+                            new DocumentFormat.OpenXml.Spreadsheet.Text(r == 0 ? "증상" : "이슈 " + r)));
+                        var row = new DocumentFormat.OpenXml.Spreadsheet.Row { RowIndex = (uint)(r + 1) };
+                        row.AppendChild(new DocumentFormat.OpenXml.Spreadsheet.Cell
+                        {
+                            CellReference = "A" + (r + 1),
+                            DataType = DocumentFormat.OpenXml.Spreadsheet.CellValues.SharedString,
+                            CellValue = new DocumentFormat.OpenXml.Spreadsheet.CellValue(r.ToString()),
+                        });
+                        data.AppendChild(row);
+                    }
+                    ws.Worksheet = new DocumentFormat.OpenXml.Spreadsheet.Worksheet(data);
+                    wb.Workbook.AppendChild(new DocumentFormat.OpenXml.Spreadsheet.Sheets(new DocumentFormat.OpenXml.Spreadsheet.Sheet
+                    {
+                        Id = wb.GetIdOfPart(ws), SheetId = 1, Name = "이슈",
+                    }));
+                }
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var loaded = new XlsxLoader().Load(path);
+                sw.Stop();
+                Assert.Equal(rows, loaded.Sections.Count);
+                Assert.Equal("증상: 이슈 20000", loaded.Sections[rows - 1].Text);
+                Assert.True(sw.Elapsed.TotalSeconds < 5, $"{sw.Elapsed.TotalSeconds:0.0}초");
+            }
+        }
     }
 }

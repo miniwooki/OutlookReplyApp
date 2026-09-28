@@ -30,6 +30,11 @@ namespace TechSupportReply.Rag.Indexing
         public int ChunkCount { get; set; }
         public List<SkippedFile> Skipped { get; } = new List<SkippedFile>();
         public TimeSpan Elapsed { get; set; }
+        /// <summary>색인을 새로 만들었거나(처음·전체 재색인·모델 변경) 내용이 바뀌었는지. 아니면 게시하지 않는다.</summary>
+        public bool HasChanges => Rebuilt || Added + Updated + Removed > 0;
+        public bool Rebuilt { get; set; }
+        /// <summary>지원하지 않는 형식이라 색인하지 않은 파일 수(확장자별, 소문자).</summary>
+        public Dictionary<string, int> Unsupported { get; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -57,6 +62,7 @@ namespace TechSupportReply.Rag.Indexing
             var sw = Stopwatch.StartNew();
             var report = new IndexBuildReport { ProductId = productId };
             if (full || ModelDiffers(indexPath)) DeleteIndex(indexPath);
+            report.Rebuilt = !File.Exists(indexPath);
 
             using (var store = SqliteIndexStore.Create(indexPath))
             {
@@ -65,7 +71,7 @@ namespace TechSupportReply.Rag.Indexing
                 store.SetMeta(MetaProductId, productId);
 
                 var indexed = store.GetFiles().ToDictionary(f => f.RelativePath, StringComparer.OrdinalIgnoreCase);
-                var current = ScanFiles(productDir);
+                var current = ScanFiles(productDir, report);
                 int n = 0;
                 foreach (var file in current)
                 {
@@ -107,7 +113,11 @@ namespace TechSupportReply.Rag.Indexing
                     catch (DocumentLoadException ex)
                     {
                         report.Skipped.Add(new SkippedFile { RelativePath = relative, Reason = ex.Reason });
-                        if (existing != null) store.RemoveFile(relative);
+                        if (existing != null)
+                        {
+                            store.RemoveFile(relative);
+                            report.Removed++;
+                        }
                         continue;
                     }
                     store.UpsertFile(relative, file.Length, mtime, hash, chunks);
@@ -121,7 +131,7 @@ namespace TechSupportReply.Rag.Indexing
                     report.Removed++;
                 }
 
-                store.SetMeta(MetaBuiltAt, DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture));
+                if (report.HasChanges) store.SetMeta(MetaBuiltAt, DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture));
                 report.FileCount = store.GetFiles().Count;
                 report.ChunkCount = store.ChunkCount;
             }
@@ -148,14 +158,23 @@ namespace TechSupportReply.Rag.Indexing
             return result;
         }
 
-        private List<FileInfo> ScanFiles(string productDir)
+        private List<FileInfo> ScanFiles(string productDir, IndexBuildReport report)
         {
-            if (!Directory.Exists(productDir)) return new List<FileInfo>();
-            return new DirectoryInfo(productDir)
-                .EnumerateFiles("*", SearchOption.AllDirectories)
-                .Where(f => !KbLayout.IsIgnored(Relative(productDir, f.FullName)) && _loaders.CanLoad(f.FullName))
-                .OrderBy(f => f.FullName, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var result = new List<FileInfo>();
+            if (!Directory.Exists(productDir)) return result;
+            foreach (var f in new DirectoryInfo(productDir).EnumerateFiles("*", SearchOption.AllDirectories))
+            {
+                if (KbLayout.IsIgnored(Relative(productDir, f.FullName))) continue;
+                if (_loaders.CanLoad(f.FullName))
+                {
+                    result.Add(f);
+                    continue;
+                }
+                var ext = f.Extension.Length == 0 ? "(확장자 없음)" : f.Extension.ToLowerInvariant();
+                report.Unsupported.TryGetValue(ext, out var count);
+                report.Unsupported[ext] = count + 1;
+            }
+            return result.OrderBy(f => f.FullName, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         private bool ModelDiffers(string indexPath)

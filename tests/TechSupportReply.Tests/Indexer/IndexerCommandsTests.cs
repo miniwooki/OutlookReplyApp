@@ -145,5 +145,24 @@ namespace TechSupportReply.Tests.Indexer
             Assert.Contains("사용법", output);
             Assert.Equal(1, Run(FakeEnv(), "index", "--root", @"C:\no\such\kb-root", "--model", @"C:\no\model").Code);
         }
+
+        [Fact]
+        public void Index_ReportsUnsupportedFormats_AndSkipsUnchangedPublish()
+        {
+            using (var tmp = new TempDir())
+            {
+                var root = Path.Combine(tmp.Root, "kb");
+                Run(FakeEnv(), "init-kb", "--root", root);
+                tmp.File("kb/LS-DYNA/faq/a.md", "접촉");
+                tmp.File("kb/LS-DYNA/manuals/old.hwp", "x");
+                var args = new[] { "index", "--root", root, "--product", "ls-dyna", "--model", FakeModel(tmp), "--work", Path.Combine(tmp.Root, "work") };
+                var first = Run(FakeEnv(), args);
+                Assert.Contains(".hwp 1개", first.Output);
+                var second = Run(FakeEnv(), args);
+                Assert.Equal(0, second.Code);
+                Assert.Contains("변경 없음", second.Output);
+                Assert.Equal(1, IndexManifest.Load(KbLayout.ManifestPath(root)).Find("ls-dyna").Version);
+            }
+        }
     }
 }

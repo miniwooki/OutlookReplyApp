@@ -111,5 +111,26 @@ namespace TechSupportReply.Tests.Rag.Indexing
                     Assert.Single(store.GetFiles());
             }
         }
+
+        [Fact]
+        public void Publish_NoChanges_KeepsVersionAndFile()
+        {
+            using (var tmp = new TempDir())
+            {
+                var root = tmp.Sub("kb");
+                var publisher = new IndexPublisher(root);
+                var r1 = BuildLocal(tmp, "ls-dyna", "접촉 문서", out var w1);
+                var first = publisher.Publish("ls-dyna", w1, FakeEmbedder.Id, 64, r1);
+
+                var work = publisher.PrepareWorkingCopy("ls-dyna", tmp.Sub("work3"));
+                var r2 = new IndexBuilder(DocumentLoaderRegistry.CreateDefault(), new Chunker(), new FakeEmbedder())
+                    .Build("ls-dyna", System.IO.Path.Combine(tmp.Root, "src", "ls-dyna"), work, false, null, CancellationToken.None);
+                Assert.False(r2.HasChanges);
+                var second = publisher.Publish("ls-dyna", work, FakeEmbedder.Id, 64, r2);
+                Assert.Equal(first.Version, second.Version);
+                Assert.Equal(first.Sha256, second.Sha256);
+                Assert.Equal(first.Sha256, IndexManifest.Load(KbLayout.ManifestPath(root)).Find("ls-dyna").Sha256);
+            }
+        }
     }
 }

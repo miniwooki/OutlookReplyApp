@@ -183,5 +183,39 @@ namespace TechSupportReply.Tests.Rag.Indexing
                 Assert.True(File.Exists(indexPath));
             }
         }
+
+        [Fact]
+        public void Build_NoChanges_KeepsBuiltAtAndReportsNoChanges()
+        {
+            using (var tmp = new TempDir())
+            {
+                var dir = Product(tmp);
+                var indexPath = Path.Combine(tmp.Root, "work", "i.sqlite");
+                var builder = Builder(new FakeEmbedder());
+                Assert.True(Build(builder, dir, indexPath).HasChanges);
+                string builtAt;
+                using (var store = SqliteIndexStore.OpenReadOnly(indexPath)) builtAt = store.GetMeta("built_at");
+                Thread.Sleep(20);
+                Assert.False(Build(builder, dir, indexPath).HasChanges);
+                using (var store = SqliteIndexStore.OpenReadOnly(indexPath)) Assert.Equal(builtAt, store.GetMeta("built_at"));
+            }
+        }
+
+        [Fact]
+        public void Build_UnsupportedExtensions_AreCounted()
+        {
+            using (var tmp = new TempDir())
+            {
+                var dir = Product(tmp);
+                tmp.File("kb/LS-DYNA/manuals/old.hwp", "x");
+                tmp.File("kb/LS-DYNA/manuals/slides.PPTX", "x");
+                tmp.File("kb/LS-DYNA/manuals/more.hwp", "x");
+                var report = Build(Builder(new FakeEmbedder()), dir, Path.Combine(tmp.Root, "i.sqlite"));
+                Assert.Equal(2, report.Unsupported[".hwp"]);
+                Assert.Equal(1, report.Unsupported[".pptx"]);
+                Assert.Equal(1, report.Unsupported[".png"]);
+                Assert.False(report.Unsupported.ContainsKey(".md"));
+            }
+        }
     }
 }

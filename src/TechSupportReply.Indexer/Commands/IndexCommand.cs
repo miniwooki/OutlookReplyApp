@@ -45,8 +45,11 @@ namespace TechSupportReply.Indexer.Commands
                     var info = publisher.Publish(product.Id, work, embedder.ModelId, embedder.Dimension, report);
                     output.WriteLine($"{product.Id}: 추가 {report.Added}, 갱신 {report.Updated}, 삭제 {report.Removed}, 유지 {report.Unchanged}, " +
                                      $"파일 {report.FileCount}, 청크 {report.ChunkCount}, 건너뜀 {report.Skipped.Count} " +
-                                     $"({report.Elapsed.TotalSeconds:0.0}초) → 버전 {info.Version}");
+                                     $"({report.Elapsed.TotalSeconds:0.0}초) → 버전 {info.Version}" + (report.HasChanges ? "" : " (변경 없음, 게시 생략)"));
                     foreach (var s in report.Skipped) output.WriteLine($"  건너뜀: {s.RelativePath} — {s.Reason}");
+                    if (report.Unsupported.Count > 0)
+                        output.WriteLine("  지원하지 않는 형식(색인 안 함): " +
+                                         string.Join(", ", report.Unsupported.OrderBy(u => u.Key).Select(u => $"{u.Key} {u.Value}개")));
                     skippedTotal += report.Skipped.Count;
                 }
                 output.WriteLine(skippedTotal == 0 ? "완료했습니다." : $"완료했습니다(읽지 못한 파일 {skippedTotal}개).");

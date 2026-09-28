@@ -29,6 +29,8 @@ namespace TechSupportReply.Rag.Sync
         private readonly string _root;
         private readonly string _cacheDir;
         private readonly object _lock = new object();
+        private volatile IndexManifest _local;
+        private bool _localLoaded;
 
         public IndexCacheSync(string ragRoot, string cacheDir)
         {
@@ -49,7 +51,26 @@ namespace TechSupportReply.Rag.Sync
 
         public string LocalPromptPath(string productId) => Path.Combine(_cacheDir, "prompts", productId + ".md");
 
+        /// <summary>
+        /// 로컬 캐시 매니페스트. 검색 스레드가 동기화 중에도 파일을 읽지 않도록 메모리 사본을 돌려준다.
+        /// </summary>
         public IndexManifest LoadLocalManifest()
+        {
+            if (!_localLoaded)
+            {
+                lock (_lock)
+                {
+                    if (!_localLoaded)
+                    {
+                        _local = ReadLocalManifestFile();
+                        _localLoaded = true;
+                    }
+                }
+            }
+            return _local;
+        }
+
+        private IndexManifest ReadLocalManifestFile()
         {
             try
             {
@@ -59,6 +80,16 @@ namespace TechSupportReply.Rag.Sync
             {
                 return null;
             }
+        }
+
+        /// <summary>로컬 매니페스트가 가리키지 않는 캐시 색인 파일을 지운다(열려 있어 실패하면 다음에 다시 시도).</summary>
+        public void CleanupUnreferenced()
+        {
+            if (!Directory.Exists(IndexDir)) return;
+            var keep = new HashSet<string>((LoadLocalManifest()?.Products ?? new List<ProductIndexInfo>()).Select(p => p.File),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var file in Directory.GetFiles(IndexDir, "*.sqlite"))
+                if (!keep.Contains(Path.GetFileName(file))) TryDelete(file);
         }
 
         /// <summary>캐시에 있는 제품 색인 경로. 없으면 null.</summary>
@@ -75,7 +106,7 @@ namespace TechSupportReply.Rag.Sync
             lock (_lock)
             {
                 var result = new SyncResult();
-                var local = LoadLocalManifest() ?? new IndexManifest();
+                var local = ReadLocalManifestFile() ?? new IndexManifest();
                 try
                 {
                     if (string.IsNullOrWhiteSpace(_root) || !Directory.Exists(_root))
@@ -90,6 +121,9 @@ namespace TechSupportReply.Rag.Sync
                     result.Warnings.Add($"공유 지식 폴더({_root})에 접근할 수 없습니다. "
                                         + (hasCache ? "캐시된 색인을 사용합니다." : "캐시된 색인이 없습니다."));
                 }
+                _local = ReadLocalManifestFile();
+                _localLoaded = true;
+                CleanupUnreferenced();
                 result.LocalManifest = LoadLocalManifest() ?? local;
                 return result;
             }
@@ -172,18 +206,24 @@ namespace TechSupportReply.Rag.Sync
                     && File.Exists(Path.Combine(IndexDir, cached.File)))
                     continue;
 
-                var fileName = $"{remote.ProductId}.v{remote.Version}.sqlite";
+                // 파일명에 버전과 해시를 넣어, 내용이 다르면 항상 새 파일이 되게 한다.
+                // 검색기가 열어 둔 이전 파일을 덮어쓰면 그 연결이 깨지기 때문이다.
+                var fileName = CacheFileName(remote);
                 var target = Path.Combine(IndexDir, fileName);
                 Directory.CreateDirectory(IndexDir);
-                var tmp = target + ".tmp";
-                File.Copy(Path.Combine(KbLayout.IndexDir(_root), remote.File), tmp, true);
-                if (!string.Equals(FileHash.Sha256(tmp), remote.Sha256, StringComparison.OrdinalIgnoreCase))
+                if (!File.Exists(target) || !string.Equals(FileHash.Sha256(target), remote.Sha256, StringComparison.OrdinalIgnoreCase))
                 {
-                    File.Delete(tmp);
-                    result.Warnings.Add($"'{id}' 색인 복사본의 해시가 매니페스트와 달라 기존 캐시를 유지합니다.");
-                    continue;
+                    var tmp = target + ".tmp";
+                    File.Copy(Path.Combine(KbLayout.IndexDir(_root), remote.File), tmp, true);
+                    if (!string.Equals(FileHash.Sha256(tmp), remote.Sha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Delete(tmp);
+                        result.Warnings.Add($"'{id}' 색인 복사본의 해시가 매니페스트와 달라 기존 캐시를 유지합니다.");
+                        continue;
+                    }
+                    if (File.Exists(target)) File.Delete(target);
+                    File.Move(tmp, target);
                 }
-                AtomicFile.Replace(tmp, target);
 
                 var entry = new ProductIndexInfo
                 {
@@ -200,10 +240,16 @@ namespace TechSupportReply.Rag.Sync
                     .Concat(new[] { entry })
                     .ToList();
                 local.Save(LocalManifestPath);
-                if (cached != null && cached.File != fileName) TryDelete(Path.Combine(IndexDir, cached.File));
+                _local = local;
                 result.UpdatedProducts.Add(remote.ProductId);
             }
             local.Save(LocalManifestPath);
+        }
+
+        private static string CacheFileName(ProductIndexInfo remote)
+        {
+            var hash = (remote.Sha256 ?? "").ToLowerInvariant();
+            return $"{remote.ProductId}.v{remote.Version}.{(hash.Length >= 12 ? hash.Substring(0, 12) : hash)}.sqlite";
         }
 
         private static bool IsCompleteModel(string dir) =>
