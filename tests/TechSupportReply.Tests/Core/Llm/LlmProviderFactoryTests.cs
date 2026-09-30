@@ -37,14 +37,53 @@ namespace TechSupportReply.Tests.Core.Llm
         }
 
         [Fact]
-        public void Create_MissingSecret_ThrowsAuthenticationWithProfileName()
+        public void Create_MissingSecret_ThrowsNotConfiguredWithProfileName()
         {
             using (var tmp = new TempDir())
             {
-                var ex = Assert.Throws<LlmException>(() => new LlmProviderFactory(new SecretStore(tmp.Root)).Create(
+                var ex = Assert.Throws<LlmException>(() => new LlmProviderFactory(new SecretStore(tmp.Root), _ => null).Create(
                     new LlmProfile { DisplayName = "개인 키", Provider = LlmProviderKind.OpenAI, Model = "m", SecretId = "none" }));
-                Assert.Equal(LlmErrorKind.Authentication, ex.Kind);
-                Assert.Contains("개인 키", ex.Message);
+                Assert.Equal(LlmErrorKind.NotConfigured, ex.Kind);
+                Assert.Contains("개인 키", ex.UserMessage);
+            }
+        }
+
+        [Fact]
+        public void ResolveApiKey_EnvVarWins_ThenFallsBackToSecret()
+        {
+            using (var tmp = new TempDir())
+            {
+                var secrets = new SecretStore(tmp.Root);
+                secrets.Set("s1", "stored");
+                var profile = new LlmProfile { Provider = LlmProviderKind.OpenAI, Model = "m", SecretId = "s1", ApiKeyEnvVar = "MY_KEY" };
+
+                Assert.Equal("from-env", new LlmProviderFactory(secrets, n => n == "MY_KEY" ? "from-env" : null).ResolveApiKey(profile));
+                Assert.Equal("stored", new LlmProviderFactory(secrets, _ => null).ResolveApiKey(profile));
+            }
+        }
+
+        [Fact]
+        public void Create_PassesResolvedKeyToInjectedFactory()
+        {
+            using (var tmp = new TempDir())
+            {
+                string seenKey = null;
+                var fake = new FakeLlmProvider();
+                var factory = new LlmProviderFactory(new SecretStore(tmp.Root), _ => "env-key", (p, k) => { seenKey = k; return fake; });
+                Assert.Same(fake, factory.Create(new LlmProfile { DisplayName = "x", Provider = LlmProviderKind.OpenAI, Model = "m", ApiKeyEnvVar = "X" }));
+                Assert.Equal("env-key", seenKey);
+            }
+        }
+
+        [Fact]
+        public void Create_EnvVarProfileWithoutValue_MentionsVariableName()
+        {
+            using (var tmp = new TempDir())
+            {
+                var ex = Assert.Throws<LlmException>(() => new LlmProviderFactory(new SecretStore(tmp.Root), _ => null).Create(
+                    new LlmProfile { DisplayName = "Claude", Provider = LlmProviderKind.Anthropic, Model = "claude-opus-5", ApiKeyEnvVar = "ANTHROPIC_API_KEY" }));
+                Assert.Equal(LlmErrorKind.NotConfigured, ex.Kind);
+                Assert.Contains("ANTHROPIC_API_KEY", ex.UserMessage);
             }
         }
 

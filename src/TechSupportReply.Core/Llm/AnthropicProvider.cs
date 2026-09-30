@@ -30,15 +30,38 @@ namespace TechSupportReply.Core.Llm
         private readonly AnthropicClient _client;
 
         public AnthropicProvider(LlmProfile profile, string apiKey)
+            : this(profile, apiKey, null)
+        {
+        }
+
+        /// <summary>handler는 테스트용이다. null이고 WorkspaceId도 없으면 SDK 기본 HttpClient를 쓴다.</summary>
+        internal AnthropicProvider(LlmProfile profile, string apiKey, HttpMessageHandler handler)
         {
             _profile = profile ?? throw new ArgumentNullException(nameof(profile));
             EnsureSupportedModel(profile.Model);
             if (string.IsNullOrWhiteSpace(apiKey)) throw new LlmException(LlmErrorKind.Authentication, "API 키가 비어 있습니다.");
-            _client = new AnthropicClient
-            {
-                ApiKey = apiKey,
-                Handlers = [new BetaRefusalFallbackHandler { Fallbacks = [new(Model.ClaudeOpus4_8)] }],
-            };
+            var workspaceId = (profile.WorkspaceId ?? "").Trim();
+            _client = workspaceId.Length == 0 && handler == null
+                ? new AnthropicClient
+                {
+                    ApiKey = apiKey,
+                    Handlers = [new BetaRefusalFallbackHandler { Fallbacks = [new(Model.ClaudeOpus4_8)] }],
+                }
+                : new AnthropicClient
+                {
+                    ApiKey = apiKey,
+                    Handlers = [new BetaRefusalFallbackHandler { Fallbacks = [new(Model.ClaudeOpus4_8)] }],
+                    HttpClient = CreateHttpClient(workspaceId, handler),
+                };
+        }
+
+        internal static HttpClient CreateHttpClient(string workspaceId, HttpMessageHandler handler)
+        {
+            var http = handler == null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
+            // 요청별 시간 제한은 SDK의 Timeout 설정이 맡는다. HttpClient 기본 100초는 긴 스트리밍을 끊는다.
+            http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+            if (!string.IsNullOrEmpty(workspaceId)) http.DefaultRequestHeaders.TryAddWithoutValidation("anthropic-workspace-id", workspaceId);
+            return http;
         }
 
         public string DisplayName => _profile.DisplayName;
@@ -146,6 +169,9 @@ namespace TechSupportReply.Core.Llm
 
         private static LlmException Translate(Exception ex)
         {
+            if (!(ex is LlmException) && !(ex is OperationCanceledException)
+                && (ex.Message ?? "").IndexOf("anthropic-workspace-id", StringComparison.OrdinalIgnoreCase) >= 0)
+                return new LlmException(LlmErrorKind.WorkspaceRequired, ex.Message, ex);
             switch (ex)
             {
                 case LlmException _:

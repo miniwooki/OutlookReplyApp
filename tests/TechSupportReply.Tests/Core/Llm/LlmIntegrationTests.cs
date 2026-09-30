@@ -15,8 +15,7 @@ namespace TechSupportReply.Tests.Core.Llm
     {
         private static string Env(string name)
         {
-            var v = Environment.GetEnvironmentVariable(name);
-            return string.IsNullOrWhiteSpace(v) ? null : v;
+            return TechSupportReply.Core.Settings.EnvironmentVariables.Get(name);
         }
 
         private static LlmRequest Hello()
@@ -31,6 +30,7 @@ namespace TechSupportReply.Tests.Core.Llm
             DisplayName = "it",
             Provider = LlmProviderKind.Anthropic,
             Model = Env("ANTHROPIC_TEST_MODEL") ?? "claude-opus-5",
+            WorkspaceId = Env("ANTHROPIC_WORKSPACE_ID") ?? "",
         }, key);
 
         [SkippableFact]

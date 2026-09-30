@@ -12,6 +12,8 @@ namespace TechSupportReply.Core.Llm
         Network,
         Refusal,
         InvalidRequest,
+        WorkspaceRequired,
+        NotConfigured,
         Unknown,
     }
 
@@ -34,6 +36,8 @@ namespace TechSupportReply.Core.Llm
             LlmErrorKind.Server => "LLM 서비스에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도하세요.",
             LlmErrorKind.Network => "LLM 서비스에 연결할 수 없습니다. 네트워크 연결을 확인하세요.",
             LlmErrorKind.Refusal => "모델이 이 요청에 대한 응답을 거절했습니다. 내용을 수정하거나 다른 프로필로 시도하세요.",
+            LlmErrorKind.WorkspaceRequired => "이 API 키는 워크스페이스에 속해 있지 않아 Workspace ID가 필요합니다. [설정] → LLM 프로필에서 Workspace ID(wrkspc_로 시작)를 입력하거나 워크스페이스에 속한 키를 사용하세요.",
+            LlmErrorKind.NotConfigured => Message,
             LlmErrorKind.InvalidRequest => "요청 형식 오류: " + Message,
             _ => "알 수 없는 오류: " + Message,
         };

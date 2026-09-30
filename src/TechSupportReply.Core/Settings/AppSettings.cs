@@ -22,6 +22,10 @@ namespace TechSupportReply.Core.Settings
         /// <summary>low | medium | high | max (Anthropic만 사용).</summary>
         public string Effort { get; set; } = "medium";
         public string SecretId { get; set; } = "";
+        /// <summary>비어 있지 않으면 이 환경 변수의 값을 API 키로 먼저 사용한다(예: ANTHROPIC_API_KEY). 값이 없으면 SecretId로 대체한다.</summary>
+        public string ApiKeyEnvVar { get; set; } = "";
+        /// <summary>Anthropic 워크스페이스 ID(선택). 워크스페이스에 속하지 않은 키는 anthropic-workspace-id 헤더가 필요하다.</summary>
+        public string WorkspaceId { get; set; } = "";
     }
 
     public sealed class UserProfile
