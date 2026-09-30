@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-28-outlook-techsupport-autoreply-design.md` (특히 §1 아키텍처, §3.1 설정, §3.5 회신 초안, §3.6 오류·로그, §4 기술 위험, §6 문서)
 
+**실행 순서:** Task 1 → 2 → … → 12 → **15** → 13 → 14. Task 15(API 모델 목록 불러오기·작업창 프로필 선택, 2026-09-30 추가)는 Task 1~11이 만든 코드를 고치므로 Task 12 다음, 문서(Task 13)와 E2E(Task 14) 전에 실행한다. 문서 안의 Task 번호는 바꾸지 않았다.
+
 ## Global Constraints
 
 - 대상: Outlook Classic M365/2016+ **x64**, .NET Framework 4.8, VSTO Runtime 10.0(설치 확인됨: 10.0.60910).
@@ -39,14 +41,16 @@
 
 ```
 src/TechSupportReply.Core/
-  Settings/AppSettings.cs            (수정) LlmProfile.ApiKeyEnvVar, WorkspaceId
+  Settings/AppSettings.cs            (수정) LlmProfile.ApiKeyEnvVar, WorkspaceId, AppSettings.LastProfileId(Task 15)
   Settings/EnvironmentVariables.cs   (신규) 프로세스→사용자→시스템 환경 변수 조회
   Settings/ProfilePresets.cs         (신규) Claude/OpenAI/xAI 기본 프로필
   Settings/DefaultProfileSeeder.cs   (신규) 프로필이 없을 때 환경 변수로 기본 프로필 생성
   Llm/LlmException.cs                (수정) WorkspaceRequired, NotConfigured
   Llm/LlmProviderFactory.cs          (수정) 환경 변수 키, 주입 가능한 생성기
-  Llm/AnthropicProvider.cs           (수정) anthropic-workspace-id 헤더, 워크스페이스 오류 변환
+  Llm/AnthropicProvider.cs           (수정) anthropic-workspace-id 헤더, 워크스페이스 오류 변환, IsSupportedModel(Task 15)
+  Llm/OpenAiProvider.cs              (수정, Task 15) Translate를 internal로(모델 목록 오류 변환 공유)
   Llm/LlmConnectionTester.cs         (신규) [연결 테스트]
+  Llm/LlmModelLister.cs              (신규, Task 15) [모델 목록 불러오기]: Anthropic /v1/models, OpenAI 호환 /models
   Text/ReplyHtmlComposer.cs          (신규) 답변 텍스트 → HTML, 회신 본문 맨 앞 삽입
   Diagnostics/FileLog.cs             (신규) 날짜별 로그
 src/TechSupportReply.App/            (신규, SDK 스타일 net48 WinForms)
@@ -58,12 +62,12 @@ src/TechSupportReply.App/            (신규, SDK 스타일 net48 WinForms)
   Hosting/AddInServices.cs           조립 루트(IReplyBackend, ISettingsHost)
   Mail/AttachmentTextBuilder.cs      텍스트 첨부 선별·발췌
   Pane/IReplyPaneView.cs             작업창 뷰 계약 + PaneState
-  Pane/IReplyBackend.cs
-  Pane/ReplyPanePresenter.cs         분류→변경→생성(스트리밍)→초안 흐름
-  Pane/ReplyTaskPaneControl.cs       WinForms UserControl(IReplyPaneView)
-  SettingsUi/ISettingsHost.cs
+  Pane/IReplyBackend.cs              (Task 15: HasUsableKey, SaveLastProfile)
+  Pane/ReplyPanePresenter.cs         분류→변경→생성(스트리밍)→초안 흐름, 키 있는 프로필만 표시·마지막 선택 기억(Task 15)
+  Pane/ReplyTaskPaneControl.cs       WinForms UserControl(IReplyPaneView), 프로필 "표시명 · 모델"(Task 15)
+  SettingsUi/ISettingsHost.cs        (Task 15: ListModelsAsync)
   SettingsUi/SettingsEditor.cs       프로필 CRUD·비밀·검증(순수 로직)
-  SettingsUi/SettingsForm.cs         WinForms 설정 대화상자
+  SettingsUi/SettingsForm.cs         WinForms 설정 대화상자, [모델 목록 불러오기](Task 15)
 src/TechSupportReply.AddIn/          (신규, VSTO 구형 csproj)
   TechSupportReply.AddIn.csproj
   Properties/AssemblyInfo.cs
@@ -80,13 +84,14 @@ tools/
 docs/설치가이드.md, docs/관리자가이드.md, docs/사용자가이드.md
 tests/TechSupportReply.Tests/
   Core/Settings/EnvironmentVariablesTests.cs, DefaultProfileSeederTests.cs
-  Core/Llm/LlmProviderFactoryTests.cs(수정), AnthropicWorkspaceTests.cs, LlmConnectionTesterTests.cs
+  Core/Llm/LlmProviderFactoryTests.cs(수정), AnthropicWorkspaceTests.cs, LlmConnectionTesterTests.cs, LlmModelListerTests.cs(Task 15)
+  Core/Settings/SettingsStoreTests.cs(수정, Task 15)
   Core/Text/ReplyHtmlComposerTests.cs
   Core/Diagnostics/FileLogTests.cs
   App/NativeLibraryPreloaderTests.cs, RibbonMarkupTests.cs, AttachmentTextBuilderTests.cs,
       AddInServicesTests.cs, ReplyPanePresenterTests.cs, ReplyTaskPaneControlTests.cs,
       SettingsEditorTests.cs, SettingsFormTests.cs
-  TestSupport/Sta.cs, FakePaneView.cs, FakeBackend.cs
+  TestSupport/Sta.cs, FakePaneView.cs, FakeBackend.cs, StubHttpHandler.cs(Task 15)
 ```
 
 테스트 명령은 모두 저장소 루트에서 실행한다. 형식은 `dotnet test tests/TechSupportReply.Tests --filter "FullyQualifiedName~<클래스명>"`이다.
@@ -4783,6 +4788,1138 @@ git commit -m "feat(deploy): 수동 설치(HKCU 등록·신뢰 목록)와 ClickO
 
 ---
 
+### Task 15: API 모델 목록 불러오기 · 작업창 LLM 프로필 선택(2026-09-30 추가)
+
+사용자 요청(2026-09-30): "사용자가 등록된 api 모델을 선택하여 실행하도록 해주세요". 확정한 해석:
+1. **설정 대화상자**: 프로필마다 [모델 목록 불러오기] 버튼으로 그 프로필의 키가 쓸 수 있는 모델을 공급자 API에서 받아 드롭다운에 채운다. 모델 칸은 계속 자유 입력이 가능해서 목록에 없는 모델 ID도 쓸 수 있다.
+   - Anthropic: `GET https://api.anthropic.com/v1/models`(헤더 `x-api-key`, `anthropic-version: 2023-06-01`, 프로필에 Workspace ID가 있으면 `anthropic-workspace-id`). 최신순으로 오고 페이지 단위다(`has_more`/`last_id`, `limit` 최대 1000). 공식 SDK의 `client.Models.List(new ModelListParams { Limit = 1000 })`와 `page.HasNext()`/`page.Next(ct)`를 쓴다. 이 앱이 실행할 수 없는 모델(`AnthropicProvider`가 거부하는 claude-3·claude-haiku-4-5 등)은 목록에서 뺀다.
+   - OpenAI 호환(OpenAI, xAI `https://api.x.ai/v1`): `GET {BaseUrl 또는 https://api.openai.com/v1}/models`, `Authorization: Bearer`. 공식 SDK의 `OpenAIModelClient.GetModelsAsync`를 쓴다. 대화형이 아닌 모델(ID에 embedding·tts·whisper·dall-e·image·moderation·audio·realtime·transcribe·search·davinci·babbage가 들어감)은 빼고 `created` 최신순으로 정렬한다.
+   - 두 SDK 모두 `HttpMessageHandler`를 주입해 네트워크 없이 테스트한다(Anthropic은 Task 1의 `AnthropicProvider.CreateHttpClient`, OpenAI는 `HttpClientPipelineTransport`). 오류는 기존 공급자의 `Translate`로 `LlmException`에 매핑한다(401 → Authentication, "not scoped to a workspace" → Task 1의 WorkspaceRequired).
+   - SDK 형식·헤더·페이지 넘김·오류 메시지는 2026-09-30에 스크래치 프로젝트(Anthropic 12.50.0, OpenAI 2.14.0, net48)에서 가짜 처리기로 실행해 확인했다.
+2. **작업창**: "LLM 프로필" 드롭다운에는 키가 있는 프로필만 "표시명 · 모델"로 보인다("등록된" = DPAPI에 키가 저장됨 또는 `ApiKeyEnvVar` 환경 변수에 값이 있음. Task 1의 `LlmProviderFactory.ResolveApiKey`로 판단). 하나도 없으면 [설정]으로 안내하는 상태 메시지를 보이고 [답변 생성]을 끈다. 사용자가 드롭다운을 바꾸면 `AppSettings.LastProfileId`로 settings.json에 기억한다. 처음 선택은 LastProfileId(키 있음) → DefaultProfileId(키 있음) → 키 있는 첫 프로필 순서다. 분류 프로필 로직은 바꾸지 않는다.
+
+**선행 조건:** 테스트 프로젝트에 `<UseWindowsForms>true</UseWindowsForms>`가 있어야 한다(Task 8·10의 WinForms 테스트도 같은 조건. 없으면 `tests/TechSupportReply.Tests/TechSupportReply.Tests.csproj`의 첫 `PropertyGroup`에 추가한다).
+
+**Files:**
+- Modify: `src/TechSupportReply.Core/Settings/AppSettings.cs` (`AppSettings.LastProfileId`)
+- Modify: `src/TechSupportReply.Core/Llm/AnthropicProvider.cs` (`IsSupportedModel` 추가, `Translate` private → internal)
+- Modify: `src/TechSupportReply.Core/Llm/OpenAiProvider.cs` (`Translate` private → internal)
+- Create: `src/TechSupportReply.Core/Llm/LlmModelLister.cs`
+- Modify: `src/TechSupportReply.App/Pane/IReplyBackend.cs`, `src/TechSupportReply.App/Pane/IReplyPaneView.cs`, `src/TechSupportReply.App/Pane/ReplyPanePresenter.cs`, `src/TechSupportReply.App/Pane/ReplyTaskPaneControl.cs`
+- Modify: `src/TechSupportReply.App/SettingsUi/ISettingsHost.cs`, `src/TechSupportReply.App/SettingsUi/SettingsForm.cs`, `src/TechSupportReply.App/Hosting/AddInServices.cs`
+- Modify: `src/TechSupportReply.AddIn/ThisAddIn.cs`, `src/TechSupportReply.AddIn/Outlook/TaskPaneManager.cs`
+- Create: `tests/TechSupportReply.Tests/TestSupport/StubHttpHandler.cs`, `tests/TechSupportReply.Tests/Core/Llm/LlmModelListerTests.cs`
+- Modify: `tests/TechSupportReply.Tests/TestSupport/FakePaneView.cs`, `tests/TechSupportReply.Tests/TestSupport/FakeBackend.cs`
+- Test(수정): `tests/TechSupportReply.Tests/Core/Settings/SettingsStoreTests.cs`, `tests/TechSupportReply.Tests/App/ReplyPanePresenterTests.cs`, `tests/TechSupportReply.Tests/App/ReplyTaskPaneControlTests.cs`, `tests/TechSupportReply.Tests/App/AddInServicesTests.cs`, `tests/TechSupportReply.Tests/App/SettingsFormTests.cs`
+
+**Interfaces:**
+- Consumes: Task 1 `LlmProfile.WorkspaceId`, `LlmErrorKind.WorkspaceRequired`, `AnthropicProvider.CreateHttpClient(string workspaceId, HttpMessageHandler handler)`, `Translate`의 워크스페이스 오류 변환, `LlmProviderFactory(SecretStore, Func<string,string>, Func<LlmProfile,string,ILlmProvider>).ResolveApiKey(LlmProfile)`; Task 6 `IReplyBackend`, `ISettingsHost`, `AddInServices`(`Secrets`, `GetEnv`, `SettingsStore`, `_llmFactory`, `_fieldLock`, `_settings`); Task 7 `IReplyPaneView`, `ReplyPanePresenter`, `FakePaneView`, `FakeBackend`; Task 8 `ReplyTaskPaneControl`(`Item`, `_state`, `ProfileCombo`, `GenerateButton`); Task 9 `SettingsEditor.ResolveKey`; Task 10 `SettingsForm`(`_pModel`, `_pTest`, `StoreProfile`, `SelectedProfile`, `_currentProfileId`, `ShowTest`, `AddRow`), `SettingsFormTests.Host`; Task 11 `ThisAddIn.ShowSettings`, `TaskPaneManager`
+- Produces:
+  - `AppSettings.LastProfileId : string` (기본 "")
+  - `AnthropicProvider { public static bool IsSupportedModel(string model); internal static LlmException Translate(Exception ex); }`, `OpenAiProvider { internal static LlmException Translate(Exception ex); }`
+  - `sealed class ModelListing { ModelListing(string id, string displayName, DateTimeOffset? createdAt); string Id; string DisplayName; DateTimeOffset? CreatedAt; }`
+  - `static class LlmModelLister { static Task<IReadOnlyList<ModelListing>> ListAsync(LlmProfile profile, string apiKey, CancellationToken ct); internal static Task<IReadOnlyList<ModelListing>> ListAsync(LlmProfile, string, HttpMessageHandler handler, CancellationToken); internal static bool IsChatModel(string id); }` — 실패 시 `LlmException`
+  - `IReplyBackend`에 추가: `bool HasUsableKey(LlmProfile profile); void SaveLastProfile(string profileId);`
+  - `IReplyPaneView`에 추가: `event EventHandler ProfileChangedByUser; void SetGenerateAvailable(bool available);`
+  - `ReplyPanePresenter`에 추가: `public const string NoUsableProfileMessage; Task RefreshProfilesAsync(); internal static LlmProfile PickProfile(AppSettings s, IReadOnlyList<LlmProfile> usable);`
+  - `ReplyTaskPaneControl`에 추가: `internal static string ProfileLabel(LlmProfile p);` (드롭다운 표시 "표시명 · 모델")
+  - `ISettingsHost`에 추가: `Task<IReadOnlyList<ModelListing>> ListModelsAsync(LlmProfile profile, string apiKey, CancellationToken ct);`
+  - `SettingsForm`에 추가: `internal ComboBox ModelCombo; internal Label ModelsResultLabel; internal TimeSpan ModelListTimeout {get;set;} = 30초; internal Task LoadModelsAsync();`
+  - `TaskPaneManager.RefreshProfiles()`, `ThisAddIn.ShowSettings()`는 저장(OK) 뒤 열린 작업창의 프로필 목록을 다시 채운다.
+  - 테스트 지원: `StubHttpHandler { StubHttpHandler Respond(HttpStatusCode, string body); List<RecordedRequest> Requests; }`, `RecordedRequest { string Method; Uri Uri; string Header(string name); }`, `FakePaneView.GenerateAvailable/UserChangesProfile(string)`, `FakeBackend.KeyCheck/SavedLastProfileIds/SaveLastProfileThrows/CreatedProfileIds`
+
+- [ ] **Step 1: Core 실패 테스트 작성**
+
+`tests/TechSupportReply.Tests/TestSupport/StubHttpHandler.cs`:
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace TechSupportReply.Tests.TestSupport
+{
+    /// <summary>준비한 응답을 차례로 돌려주고 요청(메서드·URI·헤더)을 기록하는 HTTP 처리기. 네트워크 없이 SDK 호출을 검증한다.</summary>
+    internal sealed class StubHttpHandler : HttpMessageHandler
+    {
+        private readonly object _lock = new object();
+        private readonly Queue<(HttpStatusCode Status, string Body)> _responses = new Queue<(HttpStatusCode Status, string Body)>();
+
+        public List<RecordedRequest> Requests { get; } = new List<RecordedRequest>();
+
+        public StubHttpHandler Respond(HttpStatusCode status, string body)
+        {
+            lock (_lock) _responses.Enqueue((status, body));
+            return this;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            (HttpStatusCode Status, string Body) next;
+            lock (_lock)
+            {
+                Requests.Add(new RecordedRequest(request));
+                if (_responses.Count == 0) throw new InvalidOperationException("준비된 응답이 없습니다: " + request.RequestUri);
+                next = _responses.Dequeue();
+            }
+            return Task.FromResult(new HttpResponseMessage(next.Status)
+            {
+                Content = new StringContent(next.Body, Encoding.UTF8, "application/json"),
+                RequestMessage = request,
+            });
+        }
+    }
+
+    /// <summary>SDK가 요청 객체를 해제해도 읽을 수 있도록 보낸 시점에 복사한 요청 정보.</summary>
+    internal sealed class RecordedRequest
+    {
+        public RecordedRequest(HttpRequestMessage request)
+        {
+            Method = request.Method.Method;
+            Uri = request.RequestUri;
+            Headers = request.Headers.ToDictionary(h => h.Key, h => string.Join(",", h.Value), StringComparer.OrdinalIgnoreCase);
+        }
+
+        public string Method { get; }
+        public Uri Uri { get; }
+        public IReadOnlyDictionary<string, string> Headers { get; }
+
+        public string Header(string name) => Headers.TryGetValue(name, out var value) ? value : null;
+    }
+}
+```
+
+`tests/TechSupportReply.Tests/Core/Llm/LlmModelListerTests.cs`:
+```csharp
+using System.Linq;
+using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
+using TechSupportReply.Core.Llm;
+using TechSupportReply.Core.Settings;
+using TechSupportReply.Tests.TestSupport;
+using Xunit;
+
+namespace TechSupportReply.Tests.Core.Llm
+{
+    public class LlmModelListerTests
+    {
+        private static LlmProfile Claude(string workspaceId) =>
+            new LlmProfile { DisplayName = "Claude", Provider = LlmProviderKind.Anthropic, Model = "claude-opus-5", WorkspaceId = workspaceId };
+
+        private static string AnthropicPage(bool hasMore, params string[] ids) =>
+            "{\"data\":[" + string.Join(",", ids.Select(id =>
+                "{\"type\":\"model\",\"id\":\"" + id + "\",\"display_name\":\"" + id.ToUpperInvariant() + "\",\"created_at\":\"2026-01-01T00:00:00Z\"}"))
+            + "],\"has_more\":" + (hasMore ? "true" : "false") + ",\"first_id\":\"" + ids.First() + "\",\"last_id\":\"" + ids.Last() + "\"}";
+
+        private static string OpenAiList(params (string Id, long Created)[] models) =>
+            "{\"object\":\"list\",\"data\":[" + string.Join(",", models.Select(m =>
+                "{\"id\":\"" + m.Id + "\",\"object\":\"model\",\"created\":" + m.Created + ",\"owned_by\":\"test\"}")) + "]}";
+
+        [Fact]
+        public async Task Anthropic_PagesThroughList_SkipsUnsupportedModels_AndSendsHeaders()
+        {
+            var handler = new StubHttpHandler()
+                .Respond(HttpStatusCode.OK, AnthropicPage(true, "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"))
+                .Respond(HttpStatusCode.OK, AnthropicPage(false, "claude-opus-4-8"));
+
+            var models = await LlmModelLister.ListAsync(Claude(" wrkspc_9 "), "sk-ant-test", handler, CancellationToken.None);
+
+            Assert.Equal(new[] { "claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-4-8" }, models.Select(m => m.Id));
+            Assert.Equal("CLAUDE-OPUS-5-5", models[0].DisplayName);
+            Assert.Equal(2, handler.Requests.Count);
+            var first = handler.Requests[0];
+            Assert.Equal("GET", first.Method);
+            Assert.Equal("/v1/models", first.Uri.AbsolutePath);
+            Assert.Contains("limit=1000", first.Uri.Query);
+            Assert.Equal("sk-ant-test", first.Header("x-api-key"));
+            Assert.Equal("2023-06-01", first.Header("anthropic-version"));
+            Assert.Equal("wrkspc_9", first.Header("anthropic-workspace-id"));
+            Assert.Contains("after_id=claude-haiku-4-5-20251001", handler.Requests[1].Uri.Query);
+        }
+
+        [Fact]
+        public async Task Anthropic_NoWorkspaceId_HeaderAbsent()
+        {
+            var handler = new StubHttpHandler().Respond(HttpStatusCode.OK, AnthropicPage(false, "claude-opus-5"));
+            var models = await LlmModelLister.ListAsync(Claude(""), "sk-ant-test", handler, CancellationToken.None);
+            Assert.Equal(new[] { "claude-opus-5" }, models.Select(m => m.Id));
+            Assert.Null(handler.Requests.Single().Header("anthropic-workspace-id"));
+        }
+
+        [Fact]
+        public async Task Anthropic_Unauthorized_MapsToAuthentication()
+        {
+            var handler = new StubHttpHandler().Respond(HttpStatusCode.Unauthorized,
+                "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}}");
+            var ex = await Assert.ThrowsAsync<LlmException>(() => LlmModelLister.ListAsync(Claude(""), "sk-bad", handler, CancellationToken.None));
+            Assert.Equal(LlmErrorKind.Authentication, ex.Kind);
+        }
+
+        [Fact]
+        public async Task Anthropic_KeyNotScopedToWorkspace_MapsToWorkspaceRequired()
+        {
+            var handler = new StubHttpHandler().Respond(HttpStatusCode.BadRequest,
+                "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use.\"}}");
+            var ex = await Assert.ThrowsAsync<LlmException>(() => LlmModelLister.ListAsync(Claude(""), "sk-ant-org", handler, CancellationToken.None));
+            Assert.Equal(LlmErrorKind.WorkspaceRequired, ex.Kind);
+            Assert.Contains("Workspace ID", ex.UserMessage);
+        }
+
+        [Fact]
+        public async Task OpenAiCompatible_UsesBaseUrlAndBearer_FiltersNonChat_NewestFirst()
+        {
+            var handler = new StubHttpHandler().Respond(HttpStatusCode.OK, OpenAiList(
+                ("grok-3", 1740000000), ("grok-2-image-1212", 1736000000), ("grok-4", 1752000000), ("text-embedding-3-large", 1760000000)));
+            var profile = new LlmProfile { DisplayName = "xAI", Provider = LlmProviderKind.OpenAI, Model = "grok-4", BaseUrl = "https://api.x.ai/v1" };
+
+            var models = await LlmModelLister.ListAsync(profile, "xai-test", handler, CancellationToken.None);
+
+            Assert.Equal(new[] { "grok-4", "grok-3" }, models.Select(m => m.Id));
+            var request = handler.Requests.Single();
+            Assert.Equal("https://api.x.ai/v1/models", request.Uri.ToString());
+            Assert.Equal("Bearer xai-test", request.Header("Authorization"));
+        }
+
+        [Fact]
+        public async Task OpenAi_DefaultEndpoint_Unauthorized_MapsToAuthentication()
+        {
+            var handler = new StubHttpHandler().Respond(HttpStatusCode.Unauthorized,
+                "{\"error\":{\"message\":\"Incorrect API key provided\",\"type\":\"invalid_request_error\"}}");
+            var profile = new LlmProfile { DisplayName = "OpenAI", Provider = LlmProviderKind.OpenAI, Model = "gpt-5.1" };
+
+            var ex = await Assert.ThrowsAsync<LlmException>(() => LlmModelLister.ListAsync(profile, "sk-bad", handler, CancellationToken.None));
+
+            Assert.Equal(LlmErrorKind.Authentication, ex.Kind);
+            Assert.Equal("https://api.openai.com/v1/models", handler.Requests.Single().Uri.ToString());
+        }
+
+        [Theory]
+        [InlineData("gpt-5.1", true)]
+        [InlineData("grok-4", true)]
+        [InlineData("o3", true)]
+        [InlineData("text-embedding-3-large", false)]
+        [InlineData("tts-1-hd", false)]
+        [InlineData("whisper-1", false)]
+        [InlineData("dall-e-3", false)]
+        [InlineData("gpt-image-1", false)]
+        [InlineData("omni-moderation-latest", false)]
+        [InlineData("gpt-4o-audio-preview", false)]
+        [InlineData("gpt-4o-realtime-preview", false)]
+        [InlineData("gpt-4o-transcribe", false)]
+        [InlineData("gpt-4o-search-preview", false)]
+        [InlineData("davinci-002", false)]
+        [InlineData("babbage-002", false)]
+        [InlineData("", false)]
+        public void IsChatModel(string id, bool expected)
+        {
+            Assert.Equal(expected, LlmModelLister.IsChatModel(id));
+        }
+    }
+}
+```
+
+`tests/TechSupportReply.Tests/Core/Settings/SettingsStoreTests.cs`에 추가:
+```csharp
+        [Fact]
+        public void SaveThenLoad_RoundTripsLastProfileId()
+        {
+            using (var tmp = new TempDir())
+            {
+                var store = new SettingsStore(tmp.Root);
+                store.Save(new AppSettings { LastProfileId = "p-xai" });
+                Assert.Equal("p-xai", store.Load().LastProfileId);
+                Assert.Equal("", new AppSettings().LastProfileId);
+            }
+        }
+```
+
+- [ ] **Step 2: 실패 확인**
+
+Run: `dotnet test tests/TechSupportReply.Tests --filter "FullyQualifiedName~LlmModelListerTests|FullyQualifiedName~SettingsStoreTests"`
+Expected: 컴파일 오류(`LlmModelLister`, `LastProfileId` 없음)
+
+- [ ] **Step 3: Core 구현**
+
+`AppSettings.cs`의 `AppSettings`에서 `ClassifierProfileId` 뒤에 추가:
+```csharp
+        /// <summary>작업창에서 사용자가 마지막으로 고른 답변 프로필. 키가 없어졌거나 삭제되면 DefaultProfileId로 대체한다.</summary>
+        public string LastProfileId { get; set; } = "";
+```
+
+`AnthropicProvider.cs`의 `EnsureSupportedModel`을 다음으로 교체한다(메시지는 그대로):
+```csharp
+        /// <summary>이 앱이 쓸 수 있는 모델인지(적응형 사고를 지원하는 Claude 4.6 이상). 모델 목록 필터에도 쓴다.</summary>
+        public static bool IsSupportedModel(string model) =>
+            !string.IsNullOrWhiteSpace(model) && !UnsupportedModelPrefixes.Any(p => model.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+
+        public static void EnsureSupportedModel(string model)
+        {
+            if (string.IsNullOrWhiteSpace(model)) throw new ArgumentException("모델명이 비어 있습니다.");
+            if (!IsSupportedModel(model))
+                throw new ArgumentException(
+                    $"'{model}'은(는) 지원하지 않습니다. 적응형 사고를 지원하는 Claude 4.6 이상 모델(예: claude-opus-5, claude-sonnet-5)을 사용하세요.");
+        }
+```
+같은 파일의 `private static LlmException Translate(Exception ex)`를 `internal static LlmException Translate(Exception ex)`로 바꾼다(본문과 Task 1의 워크스페이스 분기는 그대로). `OpenAiProvider.cs`의 `private static LlmException Translate(Exception ex)`도 `internal static`으로 바꾼다.
+
+`src/TechSupportReply.Core/Llm/LlmModelLister.cs`:
+```csharp
+using System;
+using System.ClientModel;
+using System.ClientModel.Primitives;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+using Anthropic;
+using Anthropic.Models.Models;
+using OpenAI;
+using OpenAI.Models;
+using TechSupportReply.Core.Settings;
+
+namespace TechSupportReply.Core.Llm
+{
+    /// <summary>공급자의 모델 목록 API가 돌려준 모델 하나.</summary>
+    public sealed class ModelListing
+    {
+        public ModelListing(string id, string displayName, DateTimeOffset? createdAt)
+        {
+            Id = id ?? "";
+            DisplayName = string.IsNullOrWhiteSpace(displayName) ? Id : displayName;
+            CreatedAt = createdAt;
+        }
+
+        public string Id { get; }
+        public string DisplayName { get; }
+        public DateTimeOffset? CreatedAt { get; }
+    }
+
+    /// <summary>
+    /// 설정의 [모델 목록 불러오기]. 프로필의 API 키로 쓸 수 있는 모델을 공급자 API에서 받아온다.
+    /// Anthropic은 GET /v1/models(페이지 단위, 최신순), OpenAI 호환(OpenAI·xAI)은 GET {BaseUrl}/models를 쓴다.
+    /// 네트워크 호출이므로 UI 스레드에서 기다리지 않는다. 실패하면 LlmException을 던진다.
+    /// </summary>
+    public static class LlmModelLister
+    {
+        internal const int AnthropicPageLimit = 1000;
+        internal const int MaxPages = 10;
+
+        /// <summary>대화형 텍스트 생성에 쓰지 않는 OpenAI 호환 모델 ID에 들어가는 단어.</summary>
+        internal static readonly string[] NonChatMarkers =
+        {
+            "embedding", "tts", "whisper", "dall-e", "image", "moderation", "audio", "realtime", "transcribe", "search", "davinci", "babbage",
+        };
+
+        public static Task<IReadOnlyList<ModelListing>> ListAsync(LlmProfile profile, string apiKey, CancellationToken ct) =>
+            ListAsync(profile, apiKey, null, ct);
+
+        /// <summary>handler는 테스트용이다. null이면 SDK 기본 전송을 쓴다.</summary>
+        internal static Task<IReadOnlyList<ModelListing>> ListAsync(LlmProfile profile, string apiKey, HttpMessageHandler handler, CancellationToken ct)
+        {
+            if (profile == null) throw new ArgumentNullException(nameof(profile));
+            if (string.IsNullOrWhiteSpace(apiKey)) throw new LlmException(LlmErrorKind.Authentication, "API 키가 비어 있습니다.");
+            switch (profile.Provider)
+            {
+                case LlmProviderKind.Anthropic: return ListAnthropicAsync(profile, apiKey.Trim(), handler, ct);
+                case LlmProviderKind.OpenAI: return ListOpenAiAsync(profile, apiKey.Trim(), handler, ct);
+                default: throw new NotSupportedException($"지원하지 않는 공급자: {profile.Provider}");
+            }
+        }
+
+        internal static bool IsChatModel(string id) =>
+            !string.IsNullOrWhiteSpace(id) && !NonChatMarkers.Any(m => id.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0);
+
+        private static async Task<IReadOnlyList<ModelListing>> ListAnthropicAsync(LlmProfile profile, string apiKey, HttpMessageHandler handler, CancellationToken ct)
+        {
+            var result = new List<ModelListing>();
+            using (var http = AnthropicProvider.CreateHttpClient((profile.WorkspaceId ?? "").Trim(), handler))
+            {
+                var client = new AnthropicClient { ApiKey = apiKey, HttpClient = http };
+                try
+                {
+                    ModelListPage page = await client.Models.List(new ModelListParams { Limit = AnthropicPageLimit }, ct).ConfigureAwait(false);
+                    for (int pages = 1; ; pages++)
+                    {
+                        foreach (ModelInfo m in page.Items)
+                            if (AnthropicProvider.IsSupportedModel(m.ID)) result.Add(new ModelListing(m.ID, m.DisplayName, m.CreatedAt));
+                        if (!page.HasNext() || pages >= MaxPages) break;
+                        page = await page.Next(ct).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex) when (AnthropicProvider.Translate(ex) is LlmException mapped)
+                {
+                    throw mapped;
+                }
+            }
+            return Distinct(result);
+        }
+
+        private static async Task<IReadOnlyList<ModelListing>> ListOpenAiAsync(LlmProfile profile, string apiKey, HttpMessageHandler handler, CancellationToken ct)
+        {
+            var options = new OpenAIClientOptions();
+            if (!string.IsNullOrWhiteSpace(profile.BaseUrl)) options.Endpoint = new Uri(profile.BaseUrl.Trim());
+            var http = handler == null ? null : new HttpClient(handler, disposeHandler: false);
+            try
+            {
+                if (http != null) options.Transport = new HttpClientPipelineTransport(http);
+                var client = new OpenAIModelClient(new ApiKeyCredential(apiKey), options);
+                ClientResult<OpenAIModelCollection> response = await client.GetModelsAsync(ct).ConfigureAwait(false);
+                return Distinct(response.Value
+                    .Where(m => IsChatModel(m.Id))
+                    .OrderByDescending(m => m.CreatedAt)
+                    .ThenBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
+                    .Select(m => new ModelListing(m.Id, m.Id, m.CreatedAt)));
+            }
+            catch (Exception ex) when (OpenAiProvider.Translate(ex) is LlmException mapped)
+            {
+                throw mapped;
+            }
+            finally
+            {
+                http?.Dispose();
+            }
+        }
+
+        private static IReadOnlyList<ModelListing> Distinct(IEnumerable<ModelListing> models)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return models.Where(m => m.Id.Length > 0 && seen.Add(m.Id)).ToList();
+        }
+    }
+}
+```
+
+- [ ] **Step 4: 통과 확인**
+
+Run: `dotnet test tests/TechSupportReply.Tests --filter "FullyQualifiedName~LlmModelListerTests|FullyQualifiedName~SettingsStoreTests|FullyQualifiedName~AnthropicProviderTests|FullyQualifiedName~AnthropicWorkspaceTests|FullyQualifiedName~SettingsEditorTests"`
+Expected: 모두 PASS(`SettingsEditorTests.Validate_ReportsProblems`는 `EnsureSupportedModel` 메시지가 그대로인지 확인한다)
+
+- [ ] **Step 5: App 실패 테스트 작성**
+
+`tests/TechSupportReply.Tests/TestSupport/FakePaneView.cs`에 추가한다(기존 멤버는 그대로):
+```csharp
+        public event EventHandler ProfileChangedByUser;
+
+        public bool GenerateAvailable { get; private set; } = true;
+
+        public void SetGenerateAvailable(bool available)
+        {
+            lock (_lock) GenerateAvailable = available;
+        }
+
+        public void UserChangesProfile(string id)
+        {
+            SelectedProfileId = id;
+            ProfileChangedByUser?.Invoke(this, EventArgs.Empty);
+        }
+```
+
+`tests/TechSupportReply.Tests/TestSupport/FakeBackend.cs`: 속성을 추가하고 `CreateLlm`을 교체한다.
+```csharp
+        /// <summary>null이면 모든 프로필에 키가 있다고 본다.</summary>
+        public Func<LlmProfile, bool> KeyCheck { get; set; }
+        public Exception SaveLastProfileThrows { get; set; }
+        public List<string> SavedLastProfileIds { get; } = new List<string>();
+        public List<string> CreatedProfileIds { get; } = new List<string>();
+
+        public bool HasUsableKey(LlmProfile profile) => KeyCheck == null || KeyCheck(profile);
+
+        public void SaveLastProfile(string profileId)
+        {
+            if (SaveLastProfileThrows != null) throw SaveLastProfileThrows;
+            SavedLastProfileIds.Add(profileId);
+            Settings.LastProfileId = profileId;
+        }
+
+        public ILlmProvider CreateLlm(string profileId)
+        {
+            CreatedProfileIds.Add(profileId);
+            if (CreateLlmThrows != null) throw CreateLlmThrows;
+            return Llm;
+        }
+```
+
+`tests/TechSupportReply.Tests/App/ReplyPanePresenterTests.cs`: using 목록에 `using TechSupportReply.Core.Settings;`를 추가하고, 클래스 안에 다음을 추가한다.
+```csharp
+        private static FakeBackend ThreeProfiles(FakeLlmProvider llm)
+        {
+            var backend = new FakeBackend(llm);
+            backend.Settings.Profiles.Add(new LlmProfile { Id = "p2", DisplayName = "Claude", Provider = LlmProviderKind.Anthropic, Model = "claude-opus-5" });
+            backend.Settings.Profiles.Add(new LlmProfile { Id = "p3", DisplayName = "xAI", Provider = LlmProviderKind.OpenAI, Model = "grok-4" });
+            return backend;
+        }
+
+        [Theory]
+        [InlineData("p3", "p1", "p3")]
+        [InlineData("p2", "p3", "p3")]
+        [InlineData("p2", "p2", "p1")]
+        [InlineData("", "", "p1")]
+        public async Task LoadMail_ListsOnlyProfilesWithKeys_AndSelectsLastThenDefaultThenFirst(string lastId, string defaultId, string expected)
+        {
+            var view = new FakePaneView();
+            var backend = ThreeProfiles(new FakeLlmProvider().Enqueue(DynaJson));
+            backend.KeyCheck = profile => profile.Id != "p2";
+            backend.Settings.LastProfileId = lastId;
+            backend.Settings.DefaultProfileId = defaultId;
+
+            await new ReplyPanePresenter(view, backend).LoadMailAsync(Mail);
+
+            Assert.Equal(new[] { "p1", "p3" }, view.ProfileIds);
+            Assert.Equal(expected, view.SelectedProfileId);
+            Assert.True(view.GenerateAvailable);
+        }
+
+        [Fact]
+        public async Task NoProfileWithKey_ShowsSettingsHint_AndGenerateDoesNothing()
+        {
+            var view = new FakePaneView();
+            var llm = new FakeLlmProvider().Enqueue(DynaJson);
+            var p = new ReplyPanePresenter(view, new FakeBackend(llm) { KeyCheck = _ => false });
+            await p.LoadMailAsync(Mail);
+
+            Assert.Empty(view.ProfileIds);
+            Assert.Null(view.SelectedProfileId);
+            Assert.False(view.GenerateAvailable);
+            Assert.True(view.StatusIsError);
+            Assert.Contains("[설정]", view.Status);
+
+            var requests = llm.Requests.Count;
+            await p.GenerateAsync();
+
+            Assert.Equal(requests, llm.Requests.Count);
+            Assert.Equal(ReplyPanePresenter.NoUsableProfileMessage, view.Status);
+            Assert.Equal(PaneState.Idle, view.State);
+        }
+
+        [Fact]
+        public async Task UserProfileChoice_IsRemembered_AndUsedForGeneration()
+        {
+            var view = new FakePaneView();
+            var backend = ThreeProfiles(new FakeLlmProvider().Enqueue(DynaJson).Enqueue("답"));
+            var p = new ReplyPanePresenter(view, backend);
+            await p.LoadMailAsync(Mail);
+
+            view.UserChangesProfile("p3");
+            await p.GenerateAsync();
+
+            Assert.Equal(new[] { "p3" }, backend.SavedLastProfileIds);
+            Assert.Equal("p3", backend.Settings.LastProfileId);
+            Assert.Equal("p3", backend.CreatedProfileIds.Last());
+            Assert.Equal("답", view.ReplyText);
+        }
+
+        [Fact]
+        public async Task RememberProfile_Failure_IsLoggedNotThrown()
+        {
+            var view = new FakePaneView();
+            var backend = new FakeBackend(new FakeLlmProvider().Enqueue(DynaJson)) { SaveLastProfileThrows = new System.IO.IOException("잠김") };
+            await new ReplyPanePresenter(view, backend).LoadMailAsync(Mail);
+
+            Assert.Null(Record.Exception(() => view.UserChangesProfile("p1")));
+        }
+
+        [Fact]
+        public async Task RefreshProfiles_AfterKeyAdded_EnablesGenerate()
+        {
+            var view = new FakePaneView();
+            var backend = new FakeBackend(new FakeLlmProvider().Enqueue(DynaJson)) { KeyCheck = _ => false };
+            var p = new ReplyPanePresenter(view, backend);
+            await p.LoadMailAsync(Mail);
+            Assert.False(view.GenerateAvailable);
+
+            backend.KeyCheck = null;
+            await p.RefreshProfilesAsync();
+
+            Assert.True(view.GenerateAvailable);
+            Assert.Equal(new[] { "p1" }, view.ProfileIds);
+            Assert.Equal("p1", view.SelectedProfileId);
+        }
+```
+
+`tests/TechSupportReply.Tests/App/ReplyTaskPaneControlTests.cs`에 추가:
+```csharp
+        [Fact]
+        public void Profiles_ShowNameAndModel_ProgrammaticSelectionRaisesNoUserEvent()
+        {
+            Sta.Run(() =>
+            {
+                using (var c = new ReplyTaskPaneControl())
+                {
+                    int userChanges = 0;
+                    c.ProfileChangedByUser += (s, e) => userChanges++;
+                    c.SetProfiles(new[]
+                    {
+                        new LlmProfile { Id = "a", DisplayName = "Claude", Model = "claude-opus-5" },
+                        new LlmProfile { Id = "b", DisplayName = "xAI Grok", Model = "grok-4" },
+                    }, "b");
+
+                    Assert.Equal(new[] { "Claude · claude-opus-5", "xAI Grok · grok-4" }, c.ProfileCombo.Items.Cast<object>().Select(o => o.ToString()));
+                    Assert.Equal("b", c.SelectedProfileId);
+                    Assert.Equal(0, userChanges);
+                }
+            });
+        }
+
+        [Fact]
+        public void GenerateUnavailable_KeepsGenerateDisabledWhileIdle()
+        {
+            Sta.Run(() =>
+            {
+                using (var c = new ReplyTaskPaneControl())
+                {
+                    c.SetGenerateAvailable(false);
+                    c.SetState(PaneState.Idle);
+                    Assert.False(c.GenerateButton.Enabled);
+                    Assert.True(c.DraftButton.Enabled);
+
+                    c.SetGenerateAvailable(true);
+                    Assert.True(c.GenerateButton.Enabled);
+
+                    c.SetState(PaneState.Generating);
+                    c.SetGenerateAvailable(true);
+                    Assert.False(c.GenerateButton.Enabled);
+                }
+            });
+        }
+```
+(기존 `Profiles_SelectedId`는 모델이 빈 프로필이라 표시가 "A", "B" 그대로이므로 고치지 않는다.)
+
+`tests/TechSupportReply.Tests/App/AddInServicesTests.cs`에 추가:
+```csharp
+        [Fact]
+        public void HasUsableKey_EnvValueOrStoredSecret()
+        {
+            using (var tmp = new TempDir())
+            {
+                var services = new AddInServices(Paths(tmp), n => n == "OPENAI_API_KEY" ? "sk" : null);
+                services.Secrets.Set("s1", "stored");
+
+                Assert.True(services.HasUsableKey(services.Settings.Profiles.Single()));
+                Assert.True(services.HasUsableKey(new LlmProfile { SecretId = "s1" }));
+                Assert.False(services.HasUsableKey(new LlmProfile { ApiKeyEnvVar = "XAI_API_KEY" }));
+                Assert.False(services.HasUsableKey(new LlmProfile { SecretId = "missing" }));
+                Assert.False(services.HasUsableKey(null));
+            }
+        }
+
+        [Fact]
+        public void SaveLastProfile_Persists_WithoutRebuildingSession()
+        {
+            using (var tmp = new TempDir())
+            {
+                var services = new AddInServices(Paths(tmp), _ => null);
+                var session = services.GetSession();
+
+                services.SaveLastProfile("p-xai");
+
+                Assert.Same(session, services.GetSession());
+                Assert.Equal("p-xai", services.Settings.LastProfileId);
+                Assert.Equal("p-xai", new SettingsStore(Path.Combine(tmp.Root, "settings")).Load().LastProfileId);
+            }
+        }
+```
+
+`tests/TechSupportReply.Tests/App/SettingsFormTests.cs`: using 목록에 `using System.Diagnostics;`와 `using System.Windows.Forms;`를 추가한다. `Host`의 `GetEnv` 줄을 다음으로 바꾸고 멤버를 추가한다.
+```csharp
+            public Func<string, string> GetEnv { get; set; } = _ => null;
+            public Func<LlmProfile, string, CancellationToken, Task<IReadOnlyList<ModelListing>>> ListModels { get; set; } =
+                (p, k, ct) => Task.FromResult<IReadOnlyList<ModelListing>>(new ModelListing[0]);
+            public List<(LlmProfile Profile, string Key)> ListCalls { get; } = new List<(LlmProfile Profile, string Key)>();
+
+            public Task<IReadOnlyList<ModelListing>> ListModelsAsync(LlmProfile profile, string apiKey, CancellationToken ct)
+            {
+                lock (ListCalls) ListCalls.Add((profile, apiKey));
+                return ListModels(profile, apiKey, ct);
+            }
+```
+클래스 안에 도우미와 테스트를 추가한다.
+```csharp
+        /// <summary>STA 스레드에서 비동기 처리기의 UI 연속 작업이 돌도록 메시지를 펌프한다.</summary>
+        private static void Pump(Task task)
+        {
+            var sw = Stopwatch.StartNew();
+            while (!task.IsCompleted && sw.Elapsed < TimeSpan.FromSeconds(10))
+            {
+                Application.DoEvents();
+                Thread.Sleep(5);
+            }
+            Assert.True(task.IsCompleted, "작업이 10초 안에 끝나지 않았습니다.");
+            task.GetAwaiter().GetResult();
+        }
+
+        private static Host HostWith(string dir, LlmProfile profile, Func<string, string> env)
+        {
+            var host = new Host(dir) { GetEnv = env };
+            host.Settings.Profiles.Add(profile);
+            return host;
+        }
+
+        [Fact]
+        public void LoadModels_FillsDropdownOffUiThread_KeepsTypedModel_AndSavesChoice()
+        {
+            using (var tmp = new TempDir())
+            {
+                var host = HostWith(tmp.Root,
+                    new LlmProfile { Id = "x", DisplayName = "xAI Grok", Provider = LlmProviderKind.OpenAI, Model = "my-model", BaseUrl = "https://api.x.ai/v1", ApiKeyEnvVar = "XAI_API_KEY" },
+                    n => n == "XAI_API_KEY" ? "xai-k" : null);
+                int listThread = 0;
+                host.ListModels = (p, k, ct) =>
+                {
+                    listThread = Environment.CurrentManagedThreadId;
+                    return Task.FromResult<IReadOnlyList<ModelListing>>(new[] { new ModelListing("grok-4", "grok-4", null), new ModelListing("grok-3", "grok-3", null) });
+                };
+                Sta.Run(() =>
+                {
+                    using (var f = new SettingsForm(host))
+                    {
+                        Pump(f.LoadModelsAsync());
+
+                        Assert.NotEqual(Environment.CurrentManagedThreadId, listThread);
+                        Assert.Equal(new[] { "grok-4", "grok-3" }, f.ModelCombo.Items.Cast<object>().Select(o => o.ToString()));
+                        Assert.Equal("my-model", f.ModelCombo.Text);
+                        Assert.Contains("2개", f.ModelsResultLabel.Text);
+                        Assert.Contains("목록에 없습니다", f.ModelsResultLabel.Text);
+
+                        f.ModelCombo.Text = "grok-4";   // 사용자가 목록에서 고른 것과 같다
+                        Assert.True(f.TrySave(out var errors), string.Join("\n", errors));
+                    }
+                });
+                var call = host.ListCalls.Single();
+                Assert.Equal("xai-k", call.Key);
+                Assert.Equal("https://api.x.ai/v1", call.Profile.BaseUrl);
+                Assert.Equal("grok-4", host.Applied.Profiles.Single().Model);
+            }
+        }
+
+        [Fact]
+        public void LoadModels_WithoutKey_ShowsHint_AndDoesNotCallHost()
+        {
+            using (var tmp = new TempDir())
+            {
+                var host = HostWith(tmp.Root, new LlmProfile { Id = "c", DisplayName = "Claude", Provider = LlmProviderKind.Anthropic, Model = "claude-opus-5" }, _ => null);
+                Sta.Run(() =>
+                {
+                    using (var f = new SettingsForm(host))
+                    {
+                        Pump(f.LoadModelsAsync());
+                        Assert.Contains("API 키가 없습니다", f.ModelsResultLabel.Text);
+                    }
+                });
+                Assert.Empty(host.ListCalls);
+            }
+        }
+
+        [Fact]
+        public void LoadModels_ProviderError_ShowsUserMessage()
+        {
+            using (var tmp = new TempDir())
+            {
+                var host = HostWith(tmp.Root,
+                    new LlmProfile { Id = "c", DisplayName = "Claude", Provider = LlmProviderKind.Anthropic, Model = "claude-opus-5", ApiKeyEnvVar = "ANTHROPIC_API_KEY" },
+                    n => n == "ANTHROPIC_API_KEY" ? "sk-ant" : null);
+                host.ListModels = (p, k, ct) => Task.FromException<IReadOnlyList<ModelListing>>(new LlmException(LlmErrorKind.WorkspaceRequired, "not scoped"));
+                Sta.Run(() =>
+                {
+                    using (var f = new SettingsForm(host))
+                    {
+                        Pump(f.LoadModelsAsync());
+                        Assert.Equal(new LlmException(LlmErrorKind.WorkspaceRequired, "x").UserMessage, f.ModelsResultLabel.Text);
+                    }
+                });
+            }
+        }
+
+        [Fact]
+        public void LoadModels_Timeout_ShowsTimeoutMessage()
+        {
+            using (var tmp = new TempDir())
+            {
+                var host = HostWith(tmp.Root,
+                    new LlmProfile { Id = "o", DisplayName = "OpenAI", Provider = LlmProviderKind.OpenAI, Model = "gpt-5.1", ApiKeyEnvVar = "OPENAI_API_KEY" },
+                    n => n == "OPENAI_API_KEY" ? "sk-o" : null);
+                host.ListModels = async (p, k, ct) =>
+                {
+                    await Task.Delay(Timeout.Infinite, ct);
+                    return null;
+                };
+                Sta.Run(() =>
+                {
+                    using (var f = new SettingsForm(host))
+                    {
+                        f.ModelListTimeout = TimeSpan.FromMilliseconds(100);
+                        Pump(f.LoadModelsAsync());
+                        Assert.Contains("시간", f.ModelsResultLabel.Text);
+                    }
+                });
+            }
+        }
+```
+
+- [ ] **Step 6: 실패 확인**
+
+Run: `dotnet test tests/TechSupportReply.Tests --filter "FullyQualifiedName~ReplyPanePresenterTests|FullyQualifiedName~ReplyTaskPaneControlTests|FullyQualifiedName~AddInServicesTests|FullyQualifiedName~SettingsFormTests"`
+Expected: 컴파일 오류(`IReplyBackend.HasUsableKey`, `IReplyPaneView.ProfileChangedByUser`, `ISettingsHost.ListModelsAsync`, `SettingsForm.LoadModelsAsync` 등 없음)
+
+- [ ] **Step 7: App 구현**
+
+`src/TechSupportReply.App/Pane/IReplyBackend.cs`의 인터페이스에 추가:
+```csharp
+        /// <summary>
+        /// 프로필에 쓸 수 있는 API 키가 있는지(DPAPI 저장 키 또는 값이 있는 ApiKeyEnvVar). 로컬 파일과 레지스트리를 읽으므로
+        /// 프레젠터는 백그라운드에서 호출한다.
+        /// </summary>
+        bool HasUsableKey(LlmProfile profile);
+        /// <summary>작업창에서 사용자가 고른 답변 프로필을 settings.json(LastProfileId)에 기억한다.</summary>
+        void SaveLastProfile(string profileId);
+```
+
+`src/TechSupportReply.App/Pane/IReplyPaneView.cs`: `event EventHandler ProductChangedByUser;` 뒤에 이벤트를, `SetProfiles` 뒤에 메서드를 추가하고 `SetProfiles`에 주석을 단다.
+```csharp
+        /// <summary>사용자가 LLM 프로필 드롭다운을 직접 바꿨을 때만 발생한다(코드로 선택할 때는 발생하지 않음).</summary>
+        event EventHandler ProfileChangedByUser;
+```
+```csharp
+        /// <summary>키가 있는 프로필만 받는다. 화면에는 "표시명 · 모델"로 보인다.</summary>
+        void SetProfiles(IReadOnlyList<LlmProfile> profiles, string selectedId);
+        /// <summary>false면 상태와 관계없이 [답변 생성]을 끈다(키가 있는 프로필이 없을 때).</summary>
+        void SetGenerateAvailable(bool available);
+```
+
+`src/TechSupportReply.App/Hosting/AddInServices.cs`의 `CreateLlmForTest` 뒤에 추가:
+```csharp
+        public bool HasUsableKey(LlmProfile profile)
+        {
+            if (profile == null) return false;
+            try
+            {
+                return new LlmProviderFactory(Secrets, GetEnv, _llmFactory).ResolveApiKey(profile) != null;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // secrets.dat을 복호화할 수 없으면(다른 사용자 계정·손상) 키가 없는 것으로 본다.
+                Log.Warn($"'{profile.DisplayName}' 프로필 키 확인 실패: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>LastProfileId만 바꿔 저장한다. 지식 세션은 이 값에 의존하지 않으므로 다시 만들지 않는다.</summary>
+        public void SaveLastProfile(string profileId)
+        {
+            if (string.IsNullOrEmpty(profileId)) return;
+            lock (_fieldLock)
+            {
+                if (_settings.LastProfileId == profileId) return;
+                _settings.LastProfileId = profileId;
+                SettingsStore.Save(_settings);
+            }
+        }
+
+        public Task<IReadOnlyList<ModelListing>> ListModelsAsync(LlmProfile profile, string apiKey, CancellationToken ct) =>
+            LlmModelLister.ListAsync(profile, apiKey, ct);
+```
+
+`src/TechSupportReply.App/SettingsUi/ISettingsHost.cs`: `using System.Collections.Generic;`을 추가하고 인터페이스 끝에 추가:
+```csharp
+        /// <summary>[모델 목록 불러오기]. 네트워크 호출이므로 UI 스레드에서 기다리지 않는다. 실패하면 LlmException.</summary>
+        Task<IReadOnlyList<ModelListing>> ListModelsAsync(LlmProfile profile, string apiKey, CancellationToken ct);
+```
+
+`src/TechSupportReply.App/Pane/ReplyPanePresenter.cs`:
+1. 필드 `private bool _userChoseProduct;` 뒤에 추가:
+```csharp
+        private bool _hasUsableProfile;
+
+        public const string NoUsableProfileMessage =
+            "API 키가 등록된 LLM 프로필이 없습니다. [설정] → LLM 프로필에서 키를 입력하거나 환경 변수를 설정한 뒤 다시 시도하세요.";
+```
+2. 생성자의 `_view.ProductChangedByUser += ...;` 뒤에 추가:
+```csharp
+            _view.ProfileChangedByUser += (s, e) => RememberProfile();
+```
+3. `LoadMailAsync`에서 다음 부분을
+```csharp
+            var settings = _backend.Settings;
+            _view.SetProfiles(settings.Profiles, ResolveProfile(settings, settings.DefaultProfileId)?.Id);
+            try
+            {
+                var session = await Task.Run(() => _backend.GetSession(), cts.Token);
+```
+다음으로 바꾼다.
+```csharp
+            var settings = _backend.Settings;
+            try
+            {
+                await RefreshProfilesAsync();
+                if (version != _mailVersion) return;
+                var session = await Task.Run(() => _backend.GetSession(), cts.Token);
+```
+같은 메서드의 상태 메시지 두 줄
+```csharp
+                if (llmProblem != null) _view.SetStatus("키워드로 제품군을 판별했습니다. " + llmProblem, true);
+                else _view.SetStatus("제품군을 확인하거나 바꾼 뒤 [답변 생성]을 누르세요.", false);
+```
+을 다음으로 바꾼다.
+```csharp
+                if (!_hasUsableProfile) _view.SetStatus(NoUsableProfileMessage, true);
+                else if (llmProblem != null) _view.SetStatus("키워드로 제품군을 판별했습니다. " + llmProblem, true);
+                else _view.SetStatus("제품군을 확인하거나 바꾼 뒤 [답변 생성]을 누르세요.", false);
+```
+4. `GenerateAsync`에서 `_mail == null` 검사 블록 바로 뒤에 추가:
+```csharp
+            if (!_hasUsableProfile)
+            {
+                _view.SetStatus(NoUsableProfileMessage, true);
+                return;
+            }
+```
+5. `Stop()` 앞에 추가:
+```csharp
+        /// <summary>
+        /// 키가 있는 프로필만 드롭다운에 다시 채우고 [답변 생성] 사용 가능 여부를 정한다. 메일을 불러올 때와 설정을 저장한 뒤 호출한다.
+        /// 키 확인(secrets.dat·레지스트리)은 백그라운드에서 한다. 예외를 던지지 않는다.
+        /// </summary>
+        public async Task RefreshProfilesAsync()
+        {
+            var settings = _backend.Settings;
+            var usable = await Task.Run(() => settings.Profiles.Where(IsUsable).ToList());
+            _hasUsableProfile = usable.Count > 0;
+            _view.SetProfiles(usable, PickProfile(settings, usable)?.Id);
+            _view.SetGenerateAvailable(_hasUsableProfile);
+        }
+
+        /// <summary>처음 선택: 마지막 선택(키 있음) → 기본 답변 프로필(키 있음) → 키 있는 첫 프로필.</summary>
+        internal static LlmProfile PickProfile(AppSettings s, IReadOnlyList<LlmProfile> usable) =>
+            usable.FirstOrDefault(p => p.Id == s.LastProfileId)
+            ?? usable.FirstOrDefault(p => p.Id == s.DefaultProfileId)
+            ?? usable.FirstOrDefault();
+
+        private bool IsUsable(LlmProfile profile)
+        {
+            try
+            {
+                return _backend.HasUsableKey(profile);
+            }
+            catch (Exception ex)
+            {
+                _backend.Log.Warn($"'{profile.DisplayName}' 프로필 키 확인 실패: {ex.Message}");
+                return false;
+            }
+        }
+
+        private void RememberProfile()
+        {
+            var id = _view.SelectedProfileId;
+            if (string.IsNullOrEmpty(id)) return;
+            try
+            {
+                _backend.SaveLastProfile(id);
+            }
+            catch (Exception ex)
+            {
+                _backend.Log.Warn("마지막으로 고른 프로필을 저장하지 못했습니다: " + ex.Message);
+            }
+        }
+```
+(`ResolveProfile`은 분류 프로필에만 계속 쓴다.)
+
+`src/TechSupportReply.App/Pane/ReplyTaskPaneControl.cs`:
+1. 필드 `private PaneState _state = PaneState.Idle;` 뒤에 `private bool _generateAvailable = true;`를 추가한다.
+2. 생성자의 `ProductCombo.SelectionChangeCommitted += ...;` 뒤에 추가:
+```csharp
+            ProfileCombo.SelectionChangeCommitted += (s, e) => ProfileChangedByUser?.Invoke(this, EventArgs.Empty);
+```
+3. 이벤트 목록에 `public event EventHandler ProfileChangedByUser;`를 추가한다.
+4. `SetProfiles`의 `foreach` 줄을 `foreach (var p in profiles) ProfileCombo.Items.Add(new Item(p.Id, ProfileLabel(p)));`로 바꾼다.
+5. `SetState`의 `GenerateButton.Enabled = idle;`를 `GenerateButton.Enabled = idle && _generateAvailable;`로 바꾼다.
+6. `SetState` 뒤에 추가:
+```csharp
+        public void SetGenerateAvailable(bool available)
+        {
+            _generateAvailable = available;
+            GenerateButton.Enabled = _state == PaneState.Idle && available;
+        }
+
+        /// <summary>드롭다운 표시: "표시명 · 모델"(모델이 비어 있으면 표시명만).</summary>
+        internal static string ProfileLabel(LlmProfile p) =>
+            string.IsNullOrWhiteSpace(p.Model) ? p.DisplayName : p.DisplayName + " · " + p.Model.Trim();
+```
+
+`src/TechSupportReply.App/SettingsUi/SettingsForm.cs`:
+1. using 목록에 `using System.Threading.Tasks;`를 추가한다.
+2. 필드 `private readonly TextBox _pModel = new TextBox { Dock = DockStyle.Fill };`를 편집 가능한 드롭다운으로 바꾸고, 그 아래에 필드를 추가한다(`LoadProfile`의 `_pModel.Text = p.Model;`과 `StoreProfileById`의 `p.Model = _pModel.Text.Trim();`은 그대로 동작한다).
+```csharp
+        private readonly ComboBox _pModel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Dock = DockStyle.Fill };
+        private readonly Button _pLoadModels = new Button { Text = "모델 목록 불러오기", AutoSize = true };
+        private readonly Label _pModelsResult = new Label { AutoSize = true, MaximumSize = new Size(420, 0) };
+        private const string NoKeyMessage = "API 키가 없습니다. 키를 입력하거나 환경 변수를 확인하세요.";
+```
+3. `internal SettingsEditor Editor { get; }` 뒤에 추가:
+```csharp
+        internal ComboBox ModelCombo => _pModel;
+        internal Label ModelsResultLabel => _pModelsResult;
+        internal TimeSpan ModelListTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// [모델 목록 불러오기]. 입력 중인 값을 반영한 프로필 사본과 키로 호스트에 목록을 요청하고(백그라운드), 결과를 모델 드롭다운에 채운다.
+        /// 모델 칸의 현재 값은 지우지 않는다(목록에 없는 모델도 직접 입력해 쓸 수 있다). 예외를 던지지 않는다.
+        /// </summary>
+        internal async Task LoadModelsAsync()
+        {
+            _pLoadModels.Enabled = false;
+            try
+            {
+                var p = CurrentProfileWithKey(out var key);
+                if (p == null) return;
+                if (string.IsNullOrWhiteSpace(key)) { ShowResult(_pModelsResult, false, NoKeyMessage); return; }
+                var snapshot = new LlmProfile
+                {
+                    Id = p.Id, DisplayName = p.DisplayName, Provider = p.Provider, Model = p.Model, BaseUrl = p.BaseUrl, WorkspaceId = p.WorkspaceId,
+                };
+                ShowResult(_pModelsResult, true, "모델 목록을 불러오는 중…");
+                IReadOnlyList<ModelListing> models;
+                using (var cts = new CancellationTokenSource(ModelListTimeout))
+                    models = await Task.Run(() => _host.ListModelsAsync(snapshot, key, cts.Token), cts.Token);
+                if (IsDisposed || _currentProfileId != snapshot.Id) return;   // 그사이 창을 닫았거나 다른 프로필을 골랐다
+                FillModels(models);
+            }
+            catch (OperationCanceledException)
+            {
+                ShowResult(_pModelsResult, false, "응답 시간이 초과되었습니다. 네트워크 또는 Base URL을 확인하세요.");
+            }
+            catch (LlmException ex)
+            {
+                ShowResult(_pModelsResult, false, ex.UserMessage);
+            }
+            catch (Exception ex)
+            {
+                ShowResult(_pModelsResult, false, "모델 목록을 불러오지 못했습니다: " + ex.Message);
+            }
+            finally
+            {
+                _pLoadModels.Enabled = true;
+            }
+        }
+```
+4. `BuildProfilesTab`의 `AddRow(editor, "모델", _pModel);`를 다음 두 줄로 바꾼다.
+```csharp
+            AddRow(editor, "모델", InlineRow(_pModel, _pLoadModels));
+            AddRow(editor, "", _pModelsResult);
+```
+같은 메서드의 `_pTest.Click` 처리기에서 앞부분
+```csharp
+                StoreProfile();
+                var p = SelectedProfile();
+                if (p == null) return;
+                var key = Editor.ResolveKey(p, _host.GetEnv);
+                if (string.IsNullOrWhiteSpace(key)) { ShowTest(false, "API 키가 없습니다. 키를 입력하거나 환경 변수를 확인하세요."); return; }
+```
+을 다음으로 바꾼다([모델 목록 불러오기]와 같은 키 해석을 공유한다).
+```csharp
+                var p = CurrentProfileWithKey(out var key);
+                if (p == null) return;
+                if (string.IsNullOrWhiteSpace(key)) { ShowTest(false, NoKeyMessage); return; }
+```
+`return page;` 바로 앞에 `_pLoadModels.Click += async (s, e) => await LoadModelsAsync();`를 추가한다.
+5. `LoadProfile`의 `_pTestResult.Text = "";` 뒤에 추가(프로필을 바꾸면 이전 목록을 지운다):
+```csharp
+            _pModel.Items.Clear();
+            _pModelsResult.Text = "";
+```
+6. `ShowTest` 본문을 `ShowResult(_pTestResult, ok, message);`로 바꾸고, 그 뒤에 추가한다.
+```csharp
+        private static void ShowResult(Label label, bool ok, string message)
+        {
+            label.ForeColor = ok ? Color.SeaGreen : Color.Firebrick;
+            label.Text = message;
+        }
+
+        /// <summary>편집 중인 값을 반영한 뒤 선택한 프로필과 [연결 테스트]·[모델 목록 불러오기]에 쓸 키(환경 변수 → 입력 중 → 저장됨)를 돌려준다.</summary>
+        private LlmProfile CurrentProfileWithKey(out string key)
+        {
+            StoreProfile();
+            var p = SelectedProfile();
+            key = p == null ? null : Editor.ResolveKey(p, _host.GetEnv);
+            return p;
+        }
+
+        private void FillModels(IReadOnlyList<ModelListing> models)
+        {
+            var current = _pModel.Text.Trim();
+            _pModel.BeginUpdate();
+            _pModel.Items.Clear();
+            foreach (var m in models) _pModel.Items.Add(m.Id);
+            _pModel.EndUpdate();
+            _pModel.Text = current;
+            if (models.Count == 0)
+            {
+                ShowResult(_pModelsResult, false, "이 키로 쓸 수 있는 모델이 없습니다. 키 권한과 Base URL을 확인하세요.");
+                return;
+            }
+            var note = models.Any(m => string.Equals(m.Id, current, StringComparison.OrdinalIgnoreCase))
+                ? ""
+                : " 현재 모델은 목록에 없습니다(직접 입력한 값도 그대로 쓸 수 있습니다).";
+            ShowResult(_pModelsResult, true, $"모델 {models.Count}개를 불러왔습니다. 목록에서 고르거나 직접 입력하세요.{note}");
+        }
+```
+7. `BuildKnowledgeTab`의 `rootRow` 생성 다섯 줄(`var rootRow = ...`부터 `rootRow.Controls.Add(browse, 1, 0);`까지)을 지우고 `AddRow(t, "RAG 루트", rootRow);`를 `AddRow(t, "RAG 루트", InlineRow(_ragRoot, browse));`로 바꾼다. 배치 도우미 영역에 추가한다(모델 줄과 같은 배치를 공유한다).
+```csharp
+        /// <summary>입력 칸(남는 폭 전부)과 옆 버튼을 한 줄에 놓는다.</summary>
+        private static TableLayoutPanel InlineRow(Control main, Control side)
+        {
+            var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true, Margin = Padding.Empty };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.Controls.Add(main, 0, 0);
+            row.Controls.Add(side, 1, 0);
+            return row;
+        }
+```
+(모델 드롭다운의 항목은 모델 ID 문자열이다. 항목을 고르면 드롭다운 텍스트가 곧 모델 ID가 되고, `StoreProfileById`의 `p.Model = _pModel.Text.Trim();`이 그대로 저장한다.)
+
+- [ ] **Step 8: 통과 확인**
+
+Run: `dotnet test tests/TechSupportReply.Tests --filter "FullyQualifiedName~ReplyPanePresenterTests|FullyQualifiedName~ReplyTaskPaneControlTests|FullyQualifiedName~AddInServicesTests|FullyQualifiedName~SettingsFormTests"`
+Expected: PASS(기존 테스트 포함). 이어서 `dotnet test tests/TechSupportReply.Tests`로 전체 회귀가 없는지 확인한다.
+
+- [ ] **Step 9: 애드인에서 설정 저장 후 작업창 갱신, 빌드**
+
+`src/TechSupportReply.AddIn/ThisAddIn.cs`의 `ShowSettings`를 교체한다.
+```csharp
+        internal void ShowSettings()
+        {
+            using (var form = new SettingsForm(Services))
+            {
+                // 키·프로필을 바꿨을 수 있으므로 저장했으면 열린 작업창의 프로필 목록을 다시 채운다.
+                if (form.ShowDialog() == DialogResult.OK) _panes?.RefreshProfiles();
+            }
+        }
+```
+`src/TechSupportReply.AddIn/Outlook/TaskPaneManager.cs`의 `Dispose` 앞에 추가:
+```csharp
+        /// <summary>설정을 저장한 뒤 호출한다. RefreshProfilesAsync는 예외를 던지지 않는다.</summary>
+        public void RefreshProfiles()
+        {
+            foreach (var entry in _panes.Values.ToList()) _ = entry.Presenter.RefreshProfilesAsync();
+        }
+```
+Run: `powershell -ExecutionPolicy Bypass -File tools\build-addin.ps1 -Configuration Debug`
+Expected: "빌드 완료", 오류 0개
+
+- [ ] **Step 10: 커밋**
+
+```bash
+git add src/TechSupportReply.Core src/TechSupportReply.App src/TechSupportReply.AddIn/ThisAddIn.cs src/TechSupportReply.AddIn/Outlook/TaskPaneManager.cs tests/TechSupportReply.Tests
+git commit -m "feat: API 모델 목록 불러오기와 작업창 LLM 프로필 선택(키 있는 프로필만, 마지막 선택 기억)"
+```
+
+---
+
 ### Task 13: 한국어 문서 3종
 
 **Files:**
@@ -4808,7 +5945,7 @@ git commit -m "feat(deploy): 수동 설치(HKCU 등록·신뢰 목록)와 ClickO
 
 - [ ] **Step 2: `docs/관리자가이드.md` 작성** — 공유 폴더 구조(명세 §2 그대로), `products.json` 예시와 필드 설명(`tools`의 `init-kb` 명령으로 생성: `TechSupportReply.Indexer.exe init-kb --root \\server\KB`), 제품별 `_prompt.md` 작성 요령(어조·금지사항·자주 요청할 파일), ONNX 모델 배치(`_models\bge-m3-int8\model.onnx`, `sentencepiece.bpe.model`, `tools/download_model.sh`), 색인 실행(`TechSupportReply.Indexer.exe index --root \\server\KB [--product ls-dyna] [--full]`)과 작업 스케줄러 등록 예시(`schtasks /Create /TN "TechSupportReply Index" /SC DAILY /ST 02:00 /TR "\"C:\Tools\TechSupportReply.Indexer\TechSupportReply.Indexer.exe\" index --root \\server\KB"`), 게시(`publish-addin.ps1`)와 버전 올리기, 인증서 관리. Indexer의 실제 옵션은 `src/TechSupportReply.Indexer/Program.cs`의 도움말을 읽어 그대로 옮긴다.
 
-- [ ] **Step 3: `docs/사용자가이드.md` 작성** — 첫 실행(환경 변수 `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`XAI_API_KEY`가 있으면 프로필이 자동으로 만들어짐, 워크스페이스에 속하지 않은 Anthropic 키는 Workspace ID 필요), [설정]에서 프로필 추가·키 입력·[연결 테스트]·RAG 루트 지정, 사용 흐름(메일 선택 → [기술지원 답변] → 제품군 확인·변경 → 필요하면 추가 지시 → [답변 생성] → 검토·수정 → [회신 초안 만들기] → 초안 창에서 최종 검토 후 직접 [보내기]), [중지], 참고 문서·경고 읽는 법, `[확인 필요]` 표시의 의미, 개인정보 주의(고객 메일 본문과 텍스트 첨부 발췌가 선택한 LLM 공급자에게 전송됨. 지식 문서는 로컬에서 임베딩되며 검색된 발췌만 전송됨), 자주 묻는 질문(키 오류, 워크스페이스 오류, 공유 폴더 오프라인)
+- [ ] **Step 3: `docs/사용자가이드.md` 작성** — 첫 실행(환경 변수 `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`XAI_API_KEY`가 있으면 프로필이 자동으로 만들어짐, 워크스페이스에 속하지 않은 Anthropic 키는 Workspace ID 필요), [설정]에서 프로필 추가·키 입력·[연결 테스트]·RAG 루트 지정, 모델 고르기(Task 15: 프로필의 [모델 목록 불러오기]를 누르면 그 키로 쓸 수 있는 모델이 드롭다운에 채워진다. Claude는 적응형 사고를 지원하는 모델만, OpenAI·xAI는 대화형 모델만 최신순으로 보인다. 목록에 없는 모델 ID도 직접 입력할 수 있다. 워크스페이스 오류가 나면 Workspace ID를 입력한다. 고른 뒤 [저장]), 작업창의 "LLM 프로필" 드롭다운(키가 있는 프로필만 "표시명 · 모델"로 보인다. 마지막으로 고른 프로필을 기억한다. 키가 있는 프로필이 없으면 [답변 생성]이 꺼지고 [설정]으로 안내한다. 설정을 저장하면 열린 작업창 목록이 바로 갱신된다), 사용 흐름(메일 선택 → [기술지원 답변] → 제품군 확인·변경 → 필요하면 LLM 프로필 선택·추가 지시 → [답변 생성] → 검토·수정 → [회신 초안 만들기] → 초안 창에서 최종 검토 후 직접 [보내기]), [중지], 참고 문서·경고 읽는 법, `[확인 필요]` 표시의 의미, 개인정보 주의(고객 메일 본문과 텍스트 첨부 발췌가 선택한 LLM 공급자에게 전송됨. 지식 문서는 로컬에서 임베딩되며 검색된 발췌만 전송됨), 자주 묻는 질문(키 오류, 워크스페이스 오류, 공유 폴더 오프라인)
 
 - [ ] **Step 4: 커밋**
 
@@ -4825,5 +5962,5 @@ Outlook 재시작이 필요하므로 사용자 확인을 받은 뒤 진행한다
 
 - [ ] **Step 1: 등록 확인 후 Outlook 재시작** — `tools\build-addin.ps1`(Debug)을 실행한 뒤 Outlook을 다시 시작한다. [홈] 탭에 "기술지원" 그룹이 있는지 확인한다. 없으면 `LoadBehavior` 값, "사용할 수 없는 항목" 목록, `VSTO_SUPPRESSDISPLAYALERTS=0` 설정 후 표시되는 오류 창을 확인한다.
 - [ ] **Step 2: 네이티브 DLL 확인** — 답변 1회 생성 후(RAG 루트 설정 시) Process Explorer 또는 `Get-Process OUTLOOK | % { $_.Modules } | ? ModuleName -in 'onnxruntime.dll','e_sqlite3.dll' | select FileName`으로 애드인 폴더 경로에서 로드되었는지 확인한다(System32 경로면 실패).
-- [ ] **Step 3: 명세 §7 E2E 시나리오** — 샘플 KB(`samples/kb`)를 Indexer로 색인하고 RAG 루트로 지정한 뒤 다음을 확인한다. (1) LS-DYNA 메일 → 제품군 LS-DYNA, Fluent로 바꾸면 참고 문서가 바뀐다. (2) 스트리밍 표시, [중지] 동작. (3) [회신 초안 만들기] → 서명과 인용이 보존되고 답변이 맨 위에 온다. 일반 텍스트 메일에서도 확인한다. (4) 프로필 Claude ↔ OpenAI ↔ xAI로 바꿔 다시 생성한다. 잘못된 키로 [연결 테스트]를 하면 오류 메시지가 나온다. (5) RAG 루트를 없는 경로로 바꾸면 경고가 표시되고 RAG 없이 생성된다. (6) 읽기 창(메일 더블클릭)에서도 리본 버튼이 동작한다.
+- [ ] **Step 3: 명세 §7 E2E 시나리오** — 샘플 KB(`samples/kb`)를 Indexer로 색인하고 RAG 루트로 지정한 뒤 다음을 확인한다. (1) LS-DYNA 메일 → 제품군 LS-DYNA, Fluent로 바꾸면 참고 문서가 바뀐다. (2) 스트리밍 표시, [중지] 동작. (3) [회신 초안 만들기] → 서명과 인용이 보존되고 답변이 맨 위에 온다. 일반 텍스트 메일에서도 확인한다. (4) 프로필 Claude ↔ OpenAI ↔ xAI로 바꿔 다시 생성한다. 잘못된 키로 [연결 테스트]를 하면 오류 메시지가 나온다. (5) RAG 루트를 없는 경로로 바꾸면 경고가 표시되고 RAG 없이 생성된다. (6) 읽기 창(메일 더블클릭)에서도 리본 버튼이 동작한다. (7) 모델 선택(Task 15): [설정] → LLM 프로필에서 Claude·OpenAI·xAI 프로필마다 [모델 목록 불러오기]를 눌러 목록이 채워지는지 확인한다(Claude 목록에 claude-haiku-4-5 같은 미지원 모델이 없고, OpenAI 목록에 embedding·tts·whisper·dall-e 모델이 없다. Workspace ID를 비운 조직 키는 Workspace ID 안내가 나온다. 잘못된 키는 키 오류가 나온다). 목록에서 다른 모델을 고르고 [저장]하면 열린 작업창 드롭다운이 "표시명 · 새 모델"로 바로 바뀐다. 작업창에서 프로필을 바꿔 [답변 생성]하면 그 프로필로 생성되고, Outlook을 다시 시작해도 마지막으로 고른 프로필이 선택되어 있다(settings.json의 lastProfileId). 키가 없는 프로필(환경 변수 이름만 있고 값이 없는 프로필)은 드롭다운에 보이지 않는다. 모든 프로필의 키를 지우면 [답변 생성]이 꺼지고 [설정] 안내가 나온다.
 - [ ] **Step 4: 결과 기록** — 발견한 문제는 수정 Task로 추가한다. 메모리 `project-plan-status.md`에 Plan B 상태를 갱신한다.
