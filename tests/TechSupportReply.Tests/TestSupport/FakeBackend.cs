@@ -19,13 +19,14 @@ namespace TechSupportReply.Tests.TestSupport
             var profile = new LlmProfile { Id = "p1", DisplayName = "테스트", Provider = LlmProviderKind.OpenAI, Model = "m" };
             Settings = new AppSettings { DefaultProfileId = "p1", ClassifierProfileId = "p1" };
             Settings.Profiles.Add(profile);
-            Log = new FileLog(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tsr-tests", "logs"));
+            Log = new FileLog(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tsr-tests", Guid.NewGuid().ToString("N"), "logs"));
         }
 
         public FakeLlmProvider Llm { get; }
         public FakeRetriever Retriever { get; }
         public AppSettings Settings { get; }
         public FileLog Log { get; }
+        public string LogText => System.IO.File.Exists(Log.CurrentPath) ? System.IO.File.ReadAllText(Log.CurrentPath) : "";
         public Exception CreateLlmThrows { get; set; }
         /// <summary>설정하면 GetSession이 이 이벤트가 신호될 때까지 막힌다(느린 UNC 흉내).</summary>
         public ManualResetEventSlim SessionGate { get; set; }

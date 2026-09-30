@@ -66,8 +66,12 @@ namespace TechSupportReply.Tests.TestSupport
             lock (_lock) { State = state; States.Add(state); }
         }
 
+        /// <summary>true면 다음 ClearReply 호출이 한 번 예외를 던진다(생성 직전 화면 갱신 실패 흉내).</summary>
+        public bool ThrowOnNextClearReply { get; set; }
+
         public void ClearReply()
         {
+            if (ThrowOnNextClearReply) { ThrowOnNextClearReply = false; throw new InvalidOperationException("화면 갱신 실패"); }
             lock (_lock) _reply.Clear();
         }
 

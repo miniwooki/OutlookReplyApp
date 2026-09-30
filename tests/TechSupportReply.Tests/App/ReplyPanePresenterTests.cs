@@ -176,20 +176,73 @@ namespace TechSupportReply.Tests.App
             var llm = new FakeLlmProvider().Enqueue(DynaJson);
             var p = new ReplyPanePresenter(view, new FakeBackend(llm));
             await p.LoadMailAsync(Mail);
-            llm.Delay = TimeSpan.FromMilliseconds(500);
-            llm.Enqueue("이전 메일 답변");
 
+            // 첫 메일의 생성 호출은 30초 지연된다. 취소되지 않으면 테스트가 시간 초과로 실패한다.
+            llm.Delay = TimeSpan.FromSeconds(30);
+            llm.Enqueue("이전 메일 답변");
             var gen = p.GenerateAsync();
-            await Task.Delay(100);
+            await WaitUntil(() => llm.Requests.Count == 2);
+            Assert.False(llm.Tokens[1].IsCancellationRequested);
+
+            // 둘째 메일의 분류 호출은 지연 없이 자기 응답을 받는다.
             llm.Delay = TimeSpan.Zero;
-            var secondLoad = p.LoadMailAsync(Mails.Create("두 번째 메일", "Fluent 발산"));
-            await gen;
             llm.Enqueue(DynaJson);
-            await secondLoad;
+            await p.LoadMailAsync(Mails.Create("두 번째 메일", "Fluent 발산"));
+
+            Assert.True(llm.Tokens[1].IsCancellationRequested);
+            Assert.True(await Task.WhenAny(gen, Task.Delay(5000)) == gen, "이전 생성이 취소되지 않았다");
+            await gen;
 
             Assert.Equal("두 번째 메일", view.Subject);
+            Assert.Equal("ls-dyna", view.SelectedProductId);
             Assert.Equal("", view.ReplyText);
+            Assert.DoesNotContain("중지", view.Status ?? "");
             Assert.Equal(PaneState.Idle, view.State);
+        }
+
+        [Fact]
+        public async Task Generate_ViewFailureBeforeLlmCall_IsReported_AndStateRecovers()
+        {
+            var view = new FakePaneView();
+            var backend = new FakeBackend(new FakeLlmProvider().Enqueue(DynaJson).Enqueue("답"));
+            var p = new ReplyPanePresenter(view, backend);
+            await p.LoadMailAsync(Mail);
+
+            view.ThrowOnNextClearReply = true;
+            view.ClickGenerate();
+            await WaitUntil(() => view.StatusIsError);
+
+            Assert.Contains("화면 갱신 실패", view.Status);
+            Assert.Contains("화면 갱신 실패", backend.LogText);
+            Assert.Equal(PaneState.Idle, p.State);
+
+            await p.GenerateAsync();
+            Assert.Equal("답", view.ReplyText);
+        }
+
+        [Fact]
+        public async Task Generate_TimeoutCancellation_IsReportedAsError_NotAsStop()
+        {
+            var view = new FakePaneView();
+            var llm = new FakeLlmProvider().Enqueue(DynaJson);
+            var backend = new FakeBackend(llm);
+            var p = new ReplyPanePresenter(view, backend);
+            await p.LoadMailAsync(Mail);
+            llm.ThrowOnCall = new TaskCanceledException("HttpClient timeout");
+
+            await p.GenerateAsync();
+
+            Assert.True(view.StatusIsError);
+            Assert.DoesNotContain("중지", view.Status);
+            Assert.Contains("HttpClient timeout", backend.LogText);
+            Assert.Equal(PaneState.Idle, view.State);
+        }
+
+        private static async Task WaitUntil(Func<bool> condition)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(10);
+            Assert.True(condition(), "조건이 시간 안에 충족되지 않았다");
         }
 
         [Fact]

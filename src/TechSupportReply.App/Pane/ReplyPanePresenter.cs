@@ -30,7 +30,11 @@ namespace TechSupportReply.App.Pane
         {
             _view = view ?? throw new ArgumentNullException(nameof(view));
             _backend = backend ?? throw new ArgumentNullException(nameof(backend));
-            _view.GenerateRequested += (s, e) => Guard("답변 생성 요청", () => _ = GenerateAsync());
+            _view.GenerateRequested += async (s, e) =>
+            {
+                try { await GenerateAsync(); }
+                catch (Exception ex) { ReportHandlerFailure("답변 생성 요청", ex); }
+            };
             _view.StopRequested += (s, e) => Guard("생성 중지", Stop);
             _view.DraftRequested += (s, e) => Guard("회신 초안 요청", RequestDraft);
             _view.ProductChangedByUser += (s, e) => _userChoseProduct = true;
@@ -40,16 +44,18 @@ namespace TechSupportReply.App.Pane
         private void Guard(string what, Action action)
         {
             try { action(); }
-            catch (Exception ex)
+            catch (Exception ex) { ReportHandlerFailure(what, ex); }
+        }
+
+        private void ReportHandlerFailure(string what, Exception ex)
+        {
+            try
             {
-                try
-                {
-                    _backend.Log.Error(what + " 실패", ex);
-                    _view.SetStatus(what + " 중 오류: " + ex.Message, true);
-                }
-                catch
-                {
-                }
+                _backend.Log.Error(what + " 실패", ex);
+                _view.SetStatus(what + " 중 오류: " + ex.Message, true);
+            }
+            catch
+            {
             }
         }
 
@@ -67,17 +73,17 @@ namespace TechSupportReply.App.Pane
             _mail = mail;
             _userChoseProduct = false;
 
-            _view.ShowMail(mail.Subject, string.IsNullOrEmpty(mail.SenderEmail) ? mail.SenderName : $"{mail.SenderName} <{mail.SenderEmail}>");
-            _view.ClearReply();
-            _view.SetReferences(None);
-            _view.SetWarnings(None);
-            SetState(PaneState.Classifying);
-            _view.SetStatus("제품군을 판별하는 중…", false);
-
-            var settings = _backend.Settings;
-            _view.SetProfiles(settings.Profiles, settings.ResolveProfile(settings.DefaultProfileId)?.Id);
             try
             {
+                _view.ShowMail(mail.Subject, string.IsNullOrEmpty(mail.SenderEmail) ? mail.SenderName : $"{mail.SenderName} <{mail.SenderEmail}>");
+                _view.ClearReply();
+                _view.SetReferences(None);
+                _view.SetWarnings(None);
+                SetState(PaneState.Classifying);
+                _view.SetStatus("제품군을 판별하는 중…", false);
+
+                var settings = _backend.Settings;
+                _view.SetProfiles(settings.Profiles, settings.ResolveProfile(settings.DefaultProfileId)?.Id);
                 var session = await Task.Run(() => _backend.GetSession(), cts.Token);
                 if (version != _mailVersion) return;
 
@@ -106,7 +112,7 @@ namespace TechSupportReply.App.Pane
                 if (llmProblem != null) _view.SetStatus("키워드로 제품군을 판별했습니다. " + llmProblem, true);
                 else _view.SetStatus("제품군을 확인하거나 바꾼 뒤 [답변 생성]을 누르세요.", false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
             }
             catch (Exception ex)
@@ -134,22 +140,23 @@ namespace TechSupportReply.App.Pane
             var version = _mailVersion;
             _generateCts?.Dispose();
             var cts = _generateCts = CancellationTokenSource.CreateLinkedTokenSource(_mailCts?.Token ?? CancellationToken.None);
-            SetState(PaneState.Generating);
-            _view.ClearReply();
-            _view.SetReferences(None);
-            _view.SetWarnings(None);
-            _view.SetStatus("답변을 생성하는 중… (중지하려면 [중지])", false);
-
-            var request = new ReplyRequest
-            {
-                Mail = _mail,
-                ProductId = _view.SelectedProductId ?? ProductCatalog.CommonId,
-                ExtraInstruction = _view.ExtraInstruction ?? "",
-                UseRag = _view.UseRag,
-            };
-            var profileId = _view.SelectedProfileId;
+            var mail = _mail;
             try
             {
+                SetState(PaneState.Generating);
+                _view.ClearReply();
+                _view.SetReferences(None);
+                _view.SetWarnings(None);
+                _view.SetStatus("답변을 생성하는 중… (중지하려면 [중지])", false);
+
+                var request = new ReplyRequest
+                {
+                    Mail = mail,
+                    ProductId = _view.SelectedProductId ?? ProductCatalog.CommonId,
+                    ExtraInstruction = _view.ExtraInstruction ?? "",
+                    UseRag = _view.UseRag,
+                };
+                var profileId = _view.SelectedProfileId;
                 var llm = _backend.CreateLlm(profileId);
                 var session = await Task.Run(() => _backend.GetSession(), cts.Token);
                 var generator = session.CreateGenerator(_backend.Settings);
@@ -169,7 +176,7 @@ namespace TechSupportReply.App.Pane
                 _view.SetWarnings(session.Warnings.Concat(result.Warnings).Distinct().ToList());
                 _view.SetStatus("생성 완료 — 내용을 검토·수정한 뒤 [회신 초안 만들기]를 누르세요.", false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
                 if (version == _mailVersion) _view.SetStatus("생성을 중지했습니다.", false);
             }
