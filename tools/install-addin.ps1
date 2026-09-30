@@ -11,6 +11,8 @@ param(
     [switch]$Uninstall
 )
 $ErrorActionPreference = 'Stop'
+$Target = $Target.TrimEnd([char]92, '/')
+if ($Source) { $Source = $Source.TrimEnd([char]92, '/') }
 $name = 'TechSupportReply.AddIn'
 $addinKey = "HKCU:\Software\Microsoft\Office\Outlook\Addins\$name"
 $inclusionRoot = 'HKCU:\Software\Microsoft\VSTO\Security\Inclusion'
@@ -24,7 +26,12 @@ if (Test-Path $inclusionRoot) {
 }
 
 if ($Uninstall) {
-    if (Test-Path $addinKey) { Remove-Item $addinKey -Recurse -Force }
+    if (Test-Path $addinKey) {
+        # 이 설치가 등록한 키만 지운다(개발 빌드 등 다른 등록은 그대로 둔다).
+        $current = (Get-ItemProperty $addinKey).Manifest
+        if ($current -and $current.StartsWith($manifestUrl, [StringComparison]::OrdinalIgnoreCase)) { Remove-Item $addinKey -Recurse -Force }
+        else { Write-Host "Outlook 애드인 등록이 이 설치를 가리키지 않아 그대로 두었습니다: $current" }
+    }
     if (Test-Path $Target) { Remove-Item $Target -Recurse -Force }
     Write-Host '제거했습니다. 설정(%APPDATA%\TechSupportReply)과 캐시(%LOCALAPPDATA%\TechSupportReply)는 남겨 두었습니다.'
     return
@@ -34,7 +41,7 @@ if (-not $Source) { throw '-Source(빌드 폴더)를 지정하세요.' }
 if (-not (Test-Path (Join-Path $Source "$name.vsto"))) { throw "$Source 에 $name.vsto 가 없습니다." }
 
 New-Item -ItemType Directory -Force $Target | Out-Null
-robocopy $Source $Target /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy "$Source" "$Target" /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "파일 복사 실패(robocopy $LASTEXITCODE)" }
 
 # 서명 인증서 공개 키로 VSTO 신뢰 목록에 추가(설치 확인 창 없이 로드)
