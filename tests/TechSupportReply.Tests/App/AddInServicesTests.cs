@@ -73,8 +73,18 @@ namespace TechSupportReply.Tests.App
             }
         }
 
+        private static string MakeKb(TempDir tmp, string name)
+        {
+            var kb = tmp.Sub(name);
+            new ProductCatalog(new[]
+            {
+                new ProductDefinition { Id = ProductCatalog.CommonId, DisplayName = "공통", Folder = "_common" },
+            }).Save(KbLayout.ProductsPath(kb));
+            return kb;
+        }
+
         [Fact]
-        public void ApplySettings_SavesAndRebuildsSession()
+        public void ApplySettings_NonRagChange_SavesAndKeepsSession()
         {
             using (var tmp = new TempDir())
             {
@@ -83,8 +93,62 @@ namespace TechSupportReply.Tests.App
                 var s = services.Settings;
                 s.User.Name = "홍길동";
                 services.ApplySettings(s);
-                Assert.NotSame(first, services.GetSession());
+                Assert.Same(first, services.GetSession());
                 Assert.Equal("홍길동", new SettingsStore(Path.Combine(tmp.Root, "settings")).Load().User.Name);
+            }
+        }
+
+        [Fact]
+        public void ApplySettings_RagRootChange_RebuildsSession()
+        {
+            using (var tmp = new TempDir())
+            {
+                var services = new AddInServices(Paths(tmp), _ => null, embedderFactory: _ => new FakeEmbedder());
+                var s = services.Settings;
+                s.RagRoot = MakeKb(tmp, "kb1");
+                services.ApplySettings(s);
+                var first = services.GetSession();
+
+                s.RagRoot = MakeKb(tmp, "kb2");
+                services.ApplySettings(s);
+                var second = services.GetSession();
+                Assert.NotSame(first, second);
+                Assert.NotSame(first.Sync, second.Sync);
+                Assert.Equal(s.RagRoot, second.Sync.RagRoot);
+            }
+        }
+
+        [Fact]
+        public void RootChangedDuringBuild_StaleSessionIsNotKept()
+        {
+            using (var tmp = new TempDir())
+            {
+                var services = new AddInServices(Paths(tmp), _ => null, embedderFactory: _ => new FakeEmbedder());
+                var kb1 = MakeKb(tmp, "kb1");
+                var kb2 = MakeKb(tmp, "kb2");
+                var s = services.Settings;
+                s.RagRoot = kb1;
+                services.ApplySettings(s);
+
+                var inBuild = new ManualResetEventSlim();
+                var release = new ManualResetEventSlim();
+                var first = true;
+                services.BuildHook = root =>
+                {
+                    if (!first) return;
+                    first = false;
+                    inBuild.Set();
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
+                };
+                var task = Task.Run(() => services.GetSession());
+                Assert.True(inBuild.Wait(TimeSpan.FromSeconds(10)));
+                s.RagRoot = kb2;   // 같은 인스턴스를 고쳐 다시 적용
+                services.ApplySettings(s);
+                release.Set();
+
+                var session = task.Result;
+                Assert.Equal(kb2, session.Sync.RagRoot);
+                Assert.Same(session, services.GetSession());
             }
         }
 

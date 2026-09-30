@@ -33,6 +33,12 @@ namespace TechSupportReply.App.Hosting
         private KnowledgeSession _session;
         private AppSettings _settings;
         private bool _nativeLoaded;
+        private int _version;
+        private string _appliedRoot;
+        private IndexCacheSync _sync;
+
+        /// <summary>테스트용: 세션 구성 중(루트 확정 직후)에 호출된다.</summary>
+        internal Action<string> BuildHook { get; set; }
 
         public AddInServices(AddInPaths paths, Func<string, string> getEnv = null, Func<string, IEmbedder> embedderFactory = null,
             Func<LlmProfile, string, ILlmProvider> llmFactory = null)
@@ -46,6 +52,7 @@ namespace TechSupportReply.App.Hosting
             SettingsStore = new SettingsStore(paths.SettingsDirectory);
             Secrets = new SecretStore(paths.SettingsDirectory);
             _settings = SettingsStore.Load();
+            _appliedRoot = NormalizeRoot(_settings);
             if (DefaultProfileSeeder.SeedFromEnvironment(_settings, GetEnv))
             {
                 SettingsStore.Save(_settings);
@@ -71,8 +78,15 @@ namespace TechSupportReply.App.Hosting
             lock (_fieldLock)
             {
                 _settings = settings;
-                if (_session != null) _retired.Add(_session);
-                _session = null;
+                // 세션은 RAG 루트에만 의존한다. 그 외 설정 변경은 데워진 세션을 그대로 쓴다.
+                var root = NormalizeRoot(settings);
+                if (!string.Equals(root, _appliedRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    _appliedRoot = root;
+                    _version++;
+                    if (_session != null) _retired.Add(_session);   // 사용 중일 수 있으므로 종료 시 정리
+                    _session = null;
+                }
             }
             Log.Info("설정을 저장했습니다.");
         }
@@ -83,19 +97,27 @@ namespace TechSupportReply.App.Hosting
                 if (_session != null) return _session;
             lock (_buildLock)
             {
-                AppSettings settings;
-                lock (_fieldLock)
+                while (true)
                 {
-                    if (_session != null) return _session;
-                    settings = _settings;
+                    AppSettings settings;
+                    int version;
+                    lock (_fieldLock)
+                    {
+                        if (_session != null) return _session;
+                        settings = _settings;
+                        version = _version;
+                    }
+                    var built = BuildSession(settings);
+                    lock (_fieldLock)
+                    {
+                        if (version == _version)
+                        {
+                            _session = built;
+                            return built;
+                        }
+                        _retired.Add(built);   // 만드는 사이 RAG 루트가 바뀌었으면 버리고 새 설정으로 다시 만든다
+                    }
                 }
-                var built = BuildSession(settings);
-                lock (_fieldLock)
-                {
-                    if (ReferenceEquals(settings, _settings)) _session = built;
-                    else _retired.Add(built);   // 만드는 사이 설정이 바뀌었으면 이번 호출에만 쓴다
-                }
-                return built;
             }
         }
 
@@ -125,7 +147,7 @@ namespace TechSupportReply.App.Hosting
         public IndexManifest LoadLocalManifest()
         {
             var root = (Settings.RagRoot ?? "").Trim();
-            return root.Length == 0 ? null : new IndexCacheSync(root, _paths.CacheDirectory).LoadLocalManifest();
+            return root.Length == 0 ? null : SyncFor(root).LoadLocalManifest();
         }
 
         public void Dispose()
@@ -150,7 +172,8 @@ namespace TechSupportReply.App.Hosting
             }
 
             EnsureNativeLibraries();
-            var sync = new IndexCacheSync(root, _paths.CacheDirectory);
+            BuildHook?.Invoke(root);
+            var sync = SyncFor(root);
             var catalog = LoadCatalog(root, sync, warnings);
             var retriever = new KnowledgeRetriever(sync, catalog, manifest =>
             {
@@ -187,6 +210,19 @@ namespace TechSupportReply.App.Hosting
             }
             warnings.Add("제품 목록(products.json)을 찾지 못해 기본 제품 목록을 사용합니다.");
             return ProductCatalog.CreateDefault();
+        }
+
+        private static string NormalizeRoot(AppSettings settings) => (settings.RagRoot ?? "").Trim();
+
+        /// <summary>같은 캐시 폴더·루트에는 IndexCacheSync 하나를 공유해 동기화가 한 잠금으로 직렬화되게 한다.</summary>
+        private IndexCacheSync SyncFor(string root)
+        {
+            lock (_fieldLock)
+            {
+                if (_sync == null || !string.Equals(_sync.RagRoot, root, StringComparison.OrdinalIgnoreCase))
+                    _sync = new IndexCacheSync(root, _paths.CacheDirectory);
+                return _sync;
+            }
         }
 
         private void EnsureNativeLibraries()
