@@ -27,6 +27,10 @@ namespace TechSupportReply.App.Pane
         private bool _userChoseProduct;
         private bool _hasUsableProfile;
         private int _profilesVersion;
+        /// <summary>프레젠터가 마지막으로 보인 상태 메시지. 키 안내를 설정 저장 뒤 지울지 판단한다.</summary>
+        private string _lastStatus;
+
+        private const string ReadyMessage = "제품군을 확인하거나 바꾼 뒤 [답변 생성]을 누르세요.";
 
         public const string NoUsableProfileMessage =
             "API 키가 등록된 LLM 프로필이 없습니다. [설정] → LLM 프로필에서 키를 입력하거나 환경 변수를 설정한 뒤 다시 시도하세요.";
@@ -58,7 +62,7 @@ namespace TechSupportReply.App.Pane
             try
             {
                 _backend.Log.Error(what + " 실패", ex);
-                _view.SetStatus(what + " 중 오류: " + ex.Message, true);
+                SetStatus(what + " 중 오류: " + ex.Message, true);
             }
             catch
             {
@@ -86,7 +90,7 @@ namespace TechSupportReply.App.Pane
                 _view.SetReferences(None);
                 _view.SetWarnings(None);
                 SetState(PaneState.Classifying);
-                _view.SetStatus("제품군을 판별하는 중…", false);
+                SetStatus("제품군을 판별하는 중…", false);
 
                 var settings = _backend.Settings;
                 await RefreshProfilesAsync();
@@ -116,9 +120,9 @@ namespace TechSupportReply.App.Pane
                 if (version != _mailVersion) return;
                 if (!_userChoseProduct) _view.SelectProduct(result.ProductId);
                 _view.SetClassification(Describe(session.Catalog, result));
-                if (!_hasUsableProfile) _view.SetStatus(NoUsableProfileMessage, true);
-                else if (llmProblem != null) _view.SetStatus("키워드로 제품군을 판별했습니다. " + llmProblem, true);
-                else _view.SetStatus("제품군을 확인하거나 바꾼 뒤 [답변 생성]을 누르세요.", false);
+                if (!_hasUsableProfile) SetStatus(NoUsableProfileMessage, true);
+                else if (llmProblem != null) SetStatus("키워드로 제품군을 판별했습니다. " + llmProblem, true);
+                else SetStatus(ReadyMessage, false);
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
@@ -128,7 +132,7 @@ namespace TechSupportReply.App.Pane
                 if (version != _mailVersion) return;
                 _backend.Log.Error("제품군 판별 실패", ex);
                 if (_view.SelectedProductId == null) _view.SetProducts(ProductCatalog.CreateDefault().Products, ProductCatalog.CommonId);
-                _view.SetStatus("제품군 판별 실패: " + ex.Message + " — 제품군을 직접 선택하세요.", true);
+                SetStatus("제품군 판별 실패: " + ex.Message + " — 제품군을 직접 선택하세요.", true);
             }
             finally
             {
@@ -141,12 +145,12 @@ namespace TechSupportReply.App.Pane
             if (State != PaneState.Idle) return;
             if (_mail == null)
             {
-                _view.SetStatus("메일을 먼저 선택한 뒤 리본의 [기술지원 답변]을 누르세요.", true);
+                SetStatus("메일을 먼저 선택한 뒤 리본의 [기술지원 답변]을 누르세요.", true);
                 return;
             }
             if (!_hasUsableProfile)
             {
-                _view.SetStatus(NoUsableProfileMessage, true);
+                SetStatus(NoUsableProfileMessage, true);
                 return;
             }
 
@@ -160,7 +164,7 @@ namespace TechSupportReply.App.Pane
                 _view.ClearReply();
                 _view.SetReferences(None);
                 _view.SetWarnings(None);
-                _view.SetStatus("답변을 생성하는 중… (중지하려면 [중지])", false);
+                SetStatus("답변을 생성하는 중… (중지하려면 [중지])", false);
 
                 var request = new ReplyRequest
                 {
@@ -187,21 +191,21 @@ namespace TechSupportReply.App.Pane
                 _view.ReplyText = result.Text;
                 _view.SetReferences(result.References.Select(r => r.Citation).Distinct().ToList());
                 _view.SetWarnings(session.Warnings.Concat(result.Warnings).Distinct().ToList());
-                _view.SetStatus("생성 완료 — 내용을 검토·수정한 뒤 [회신 초안 만들기]를 누르세요.", false);
+                SetStatus("생성 완료 — 내용을 검토·수정한 뒤 [회신 초안 만들기]를 누르세요.", false);
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
-                if (version == _mailVersion) _view.SetStatus("생성을 중지했습니다.", false);
+                if (version == _mailVersion) SetStatus("생성을 중지했습니다.", false);
             }
             catch (LlmException ex)
             {
                 _backend.Log.Error($"답변 생성 실패({ex.Kind})", ex);
-                if (version == _mailVersion) _view.SetStatus(ex.UserMessage, true);
+                if (version == _mailVersion) SetStatus(ex.UserMessage, true);
             }
             catch (Exception ex)
             {
                 _backend.Log.Error("답변 생성 실패", ex);
-                if (version == _mailVersion) _view.SetStatus("답변 생성 중 오류: " + ex.Message, true);
+                if (version == _mailVersion) SetStatus("답변 생성 중 오류: " + ex.Message, true);
             }
             finally
             {
@@ -224,6 +228,12 @@ namespace TechSupportReply.App.Pane
                 _hasUsableProfile = usable.Count > 0;
                 _view.SetProfiles(usable, PickProfile(settings, usable)?.Id);
                 _view.SetGenerateAvailable(_hasUsableProfile);
+                // 메일을 불러오거나 생성하는 중에는 그 흐름이 상태를 정한다. 대기 중일 때만 키 안내를 보이거나 지운다.
+                if (State == PaneState.Idle && _mail != null)
+                {
+                    if (!_hasUsableProfile) SetStatus(NoUsableProfileMessage, true);
+                    else if (_lastStatus == NoUsableProfileMessage) SetStatus(ReadyMessage, false);
+                }
             }
             catch (Exception ex)
             {
@@ -272,19 +282,25 @@ namespace TechSupportReply.App.Pane
             var text = (_view.ReplyText ?? "").Trim();
             if (text.Length == 0)
             {
-                _view.SetStatus("회신에 넣을 답변이 없습니다. 먼저 [답변 생성]을 누르세요.", true);
+                SetStatus("회신에 넣을 답변이 없습니다. 먼저 [답변 생성]을 누르세요.", true);
                 return;
             }
             try
             {
                 DraftReady?.Invoke(text);
-                _view.SetStatus("회신 초안을 열었습니다. 검토한 뒤 직접 발송하세요.", false);
+                SetStatus("회신 초안을 열었습니다. 검토한 뒤 직접 발송하세요.", false);
             }
             catch (Exception ex)
             {
                 _backend.Log.Error("회신 초안 생성 실패", ex);
-                _view.SetStatus("회신 초안을 만들지 못했습니다: " + ex.Message, true);
+                SetStatus("회신 초안을 만들지 못했습니다: " + ex.Message, true);
             }
+        }
+
+        private void SetStatus(string message, bool isError)
+        {
+            _view.SetStatus(message, isError);
+            _lastStatus = message;
         }
 
         private void SetState(PaneState state)

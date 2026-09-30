@@ -43,6 +43,7 @@ namespace TechSupportReply.Core.Llm
         internal static readonly string[] NonChatMarkers =
         {
             "embedding", "tts", "whisper", "dall-e", "image", "moderation", "audio", "realtime", "transcribe", "search", "davinci", "babbage",
+            "video", "imagine", "live",
         };
 
         public static Task<IReadOnlyList<ModelListing>> ListAsync(LlmProfile profile, string apiKey, CancellationToken ct) =>

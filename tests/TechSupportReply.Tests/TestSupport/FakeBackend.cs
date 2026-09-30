@@ -31,11 +31,14 @@ namespace TechSupportReply.Tests.TestSupport
         /// <summary>설정하면 GetSession이 이 이벤트가 신호될 때까지 막힌다(느린 UNC 흉내).</summary>
         public ManualResetEventSlim SessionGate { get; set; }
         public int GetSessionThreadId { get; private set; }
+        /// <summary>GetSession에 들어오면(게이트에서 기다리기 전) 신호된다.</summary>
+        public ManualResetEventSlim SessionEntered { get; } = new ManualResetEventSlim(false);
         public List<string> WarningsForSession { get; } = new List<string>();
 
         public KnowledgeSession GetSession()
         {
             GetSessionThreadId = Environment.CurrentManagedThreadId;
+            SessionEntered.Set();
             SessionGate?.Wait(TimeSpan.FromSeconds(10));
             return new KnowledgeSession(ProductCatalog.CreateDefault(), Retriever, p => "", WarningsForSession);
         }

@@ -117,6 +117,8 @@ namespace TechSupportReply.Tests.Core.Llm
         [InlineData("gpt-4o-search-preview", false)]
         [InlineData("davinci-002", false)]
         [InlineData("babbage-002", false)]
+        [InlineData("grok-imagine-video-1.5", false)]
+        [InlineData("gpt-live-1", false)]
         [InlineData("", false)]
         public void IsChatModel(string id, bool expected)
         {

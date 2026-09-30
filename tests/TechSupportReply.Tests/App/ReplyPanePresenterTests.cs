@@ -103,12 +103,39 @@ namespace TechSupportReply.Tests.App
             await p.LoadMailAsync(Mail);
             Assert.False(view.GenerateAvailable);
 
+            Assert.Equal(ReplyPanePresenter.NoUsableProfileMessage, view.Status);
+
             backend.KeyCheck = null;
             await p.RefreshProfilesAsync();
 
             Assert.True(view.GenerateAvailable);
             Assert.Equal(new[] { "p1" }, view.ProfileIds);
             Assert.Equal("p1", view.SelectedProfileId);
+            Assert.False(view.StatusIsError);
+            Assert.Contains("[답변 생성]", view.Status);
+
+            // 키를 지우고 설정을 저장하면 [답변 생성]이 꺼지고 안내가 다시 보인다.
+            backend.KeyCheck = _ => false;
+            await p.RefreshProfilesAsync();
+
+            Assert.False(view.GenerateAvailable);
+            Assert.Equal(ReplyPanePresenter.NoUsableProfileMessage, view.Status);
+            Assert.True(view.StatusIsError);
+        }
+
+        [Fact]
+        public async Task RefreshProfiles_WithKeys_KeepsOtherStatus()
+        {
+            var view = new FakePaneView();
+            var backend = new FakeBackend(new FakeLlmProvider()) { CreateLlmThrows = new LlmException(LlmErrorKind.NotConfigured, "키 없음") };
+            var p = new ReplyPanePresenter(view, backend);
+            await p.LoadMailAsync(Mail);
+            var status = view.Status;
+            Assert.Contains("키 없음", status);
+
+            await p.RefreshProfilesAsync();
+
+            Assert.Equal(status, view.Status);
         }
 
         [Fact]
@@ -140,9 +167,13 @@ namespace TechSupportReply.Tests.App
             Assert.Equal("접촉 경고 문의", view.Subject);
             Assert.Equal(PaneState.Classifying, view.State);
 
+            // 호출 스레드를 붙잡아 둔 채 GetSession이 시작되기를 기다린다. 테스트 스레드도 스레드 풀 스레드일 수 있어서,
+            // 먼저 풀어 주면 풀어 준 스레드가 GetSession을 넘겨받아 같은 스레드 ID가 나올 수 있다.
+            Assert.True(backend.SessionEntered.Wait(TimeSpan.FromSeconds(10)), "GetSession이 시작되지 않았습니다.");
+            Assert.NotEqual(callerThread, backend.GetSessionThreadId);
+
             backend.SessionGate.Set();
             await task;
-            Assert.NotEqual(callerThread, backend.GetSessionThreadId);
         }
 
         [Fact]
