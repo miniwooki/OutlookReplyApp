@@ -23,7 +23,8 @@
     <!-- ClickOnce 게시 기본값(publish-addin.ps1에서 덮어씀) -->
     <BootstrapperEnabled>false</BootstrapperEnabled>
     <UpdateEnabled>true</UpdateEnabled>
-    <UpdateInterval>0</UpdateInterval>
+    <!-- 7일마다 확인: 배포 공유 폴더에 닿지 않을 때(VPN 밖) Outlook 시작 때마다 기다려 느린 애드인으로 비활성화되는 것을 막는다. -->
+    <UpdateInterval>7</UpdateInterval>
     <UpdateIntervalUnits>days</UpdateIntervalUnits>
     <ProductName>기술지원 답변 도우미</ProductName>
     <PublisherName>KOSTECH</PublisherName>

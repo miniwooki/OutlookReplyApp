@@ -14,7 +14,12 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 
 if ($PfxPath) {
-    $cert = Import-PfxCertificate -FilePath $PfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $PfxPassword -Exportable
+    # PFX에 중간·루트 인증서가 함께 들어 있으면 모두 반환되므로, 개인 키가 있는 서명용 인증서 하나만 고른다.
+    $imported = @(Import-PfxCertificate -FilePath $PfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $PfxPassword -Exportable)
+    $cert = $imported | Where-Object { $_.HasPrivateKey } | Select-Object -First 1
+    if (-not $cert) { throw "$PfxPath 에 개인 키가 있는 인증서가 없습니다. 개인 키를 포함해 내보낸 PFX인지 확인하세요." }
+    $codeSigning = $cert.EnhancedKeyUsageList | Where-Object { $_.ObjectId -eq '1.3.6.1.5.5.7.3.3' }
+    if (-not $codeSigning) { throw "인증서($($cert.Subject))에 코드 서명 용도(1.3.6.1.5.5.7.3.3)가 없습니다. 코드 서명용 인증서를 사용하세요." }
 } else {
     $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
         Where-Object { $_.Subject -eq $Subject -and $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date).AddDays(30) } |

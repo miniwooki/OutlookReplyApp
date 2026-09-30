@@ -20,6 +20,12 @@ $manifestUrl = ([Uri](Join-Path $Target "$name.vsto")).AbsoluteUri
 
 if (Get-Process OUTLOOK -ErrorAction SilentlyContinue) { throw 'Outlook을 종료한 뒤 다시 실행하세요.' }
 
+# /MIR 복사와 제거는 -Target의 내용을 지운다. 이 애드인 설치 폴더가 아닌 폴더(비어 있지 않고 .vsto가 없음)는 건드리지 않는다.
+if ((Test-Path $Target) -and (Get-ChildItem -LiteralPath $Target -Force | Select-Object -First 1) -and
+    -not (Test-Path (Join-Path $Target "$name.vsto"))) {
+    throw "$Target 은(는) 비어 있지 않고 $name.vsto 도 없어 이 애드인의 설치 폴더가 아닌 것으로 보입니다. 내용이 지워질 수 있으므로 중단합니다. 빈 폴더나 새 폴더를 -Target으로 지정하세요."
+}
+
 # 이전 신뢰 목록 항목 제거(같은 URL)
 if (Test-Path $inclusionRoot) {
     Get-ChildItem $inclusionRoot | Where-Object { (Get-ItemProperty $_.PSPath).Url -eq $manifestUrl } | Remove-Item -Recurse -Force
@@ -41,7 +47,7 @@ if (-not $Source) { throw '-Source(빌드 폴더)를 지정하세요.' }
 if (-not (Test-Path (Join-Path $Source "$name.vsto"))) { throw "$Source 에 $name.vsto 가 없습니다." }
 
 New-Item -ItemType Directory -Force $Target | Out-Null
-robocopy "$Source" "$Target" /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy "$Source" "$Target" /MIR /XD app.publish /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "파일 복사 실패(robocopy $LASTEXITCODE)" }
 
 # 서명 인증서 공개 키로 VSTO 신뢰 목록에 추가(설치 확인 창 없이 로드)

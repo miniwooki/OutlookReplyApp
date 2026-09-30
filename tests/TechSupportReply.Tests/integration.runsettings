@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <RunConfiguration>
+    <TargetPlatform>x64</TargetPlatform>
+    <!-- 통합 테스트(실제 유료 API 호출)만 실행한다. 사용법은 설치가이드 개발자 주의 참고. -->
+    <TestCaseFilter>Category=Integration</TestCaseFilter>
+  </RunConfiguration>
+</RunSettings>
