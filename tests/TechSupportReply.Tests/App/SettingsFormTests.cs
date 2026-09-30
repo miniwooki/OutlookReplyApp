@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using TechSupportReply.App.SettingsUi;
+using TechSupportReply.Core.Diagnostics;
 using TechSupportReply.Core.Llm;
 using TechSupportReply.Core.Settings;
 using TechSupportReply.Rag.Indexing;
@@ -18,7 +20,13 @@ namespace TechSupportReply.Tests.App
     {
         private sealed class Host : ISettingsHost
         {
-            public Host(string dir) { Secrets = new SecretStore(dir); }
+            public Host(string dir)
+            {
+                Secrets = new SecretStore(dir);
+                Log = new FileLog(Path.Combine(dir, "logs"));
+            }
+            public FileLog Log { get; }
+            public Func<LlmProfile, string, ILlmProvider> TestLlm { get; set; } = (p, k) => new FakeLlmProvider().Enqueue("OK");
             public AppSettings Settings { get; set; } = new AppSettings();
             public SecretStore Secrets { get; }
             public Func<string, string> GetEnv { get; set; } = _ => null;
@@ -39,7 +47,7 @@ namespace TechSupportReply.Tests.App
                 EmbeddingModel = "bge-m3-int8",
                 Products = { new ProductIndexInfo { ProductId = "ls-dyna", Version = 3, BuiltAtUtc = new DateTime(2026, 9, 1), FileCount = 4, ChunkCount = 120 } },
             };
-            public ILlmProvider CreateLlmForTest(LlmProfile profile, string apiKey) => new FakeLlmProvider().Enqueue("OK");
+            public ILlmProvider CreateLlmForTest(LlmProfile profile, string apiKey) => TestLlm(profile, apiKey);
         }
 
         /// <summary>STA 스레드에서 비동기 처리기의 UI 연속 작업이 돌도록 메시지를 펌프한다.</summary>
@@ -217,6 +225,74 @@ namespace TechSupportReply.Tests.App
                     }
                 });
                 Assert.Null(host.Applied);
+            }
+        }
+
+        private static Host TwoProfileHost(string dir, FakeLlmProvider llm)
+        {
+            var host = HostWith(dir,
+                new LlmProfile { Id = "c", DisplayName = "Claude", Provider = LlmProviderKind.Anthropic, Model = "claude-opus-5", ApiKeyEnvVar = "ANTHROPIC_API_KEY" },
+                n => n == "ANTHROPIC_API_KEY" ? "sk-ant" : null);
+            host.Settings.Profiles.Add(new LlmProfile { Id = "x", DisplayName = "xAI", Provider = LlmProviderKind.OpenAI, Model = "grok-4", ApiKeyEnvVar = "ANTHROPIC_API_KEY" });
+            host.TestLlm = (p, k) => llm;
+            return host;
+        }
+
+        [Fact]
+        public void TestConnection_ShowsResult()
+        {
+            using (var tmp = new TempDir())
+            {
+                var host = TwoProfileHost(tmp.Root, new FakeLlmProvider().Enqueue("OK"));
+                Sta.Run(() =>
+                {
+                    using (var f = new SettingsForm(host))
+                    {
+                        Pump(f.TestConnectionAsync());
+                        Assert.Contains("연결 성공", f.TestResultLabel.Text);
+                    }
+                });
+            }
+        }
+
+        [Fact]
+        public void TestConnection_ProfileSwitchedBeforeResult_DropsResult()
+        {
+            using (var tmp = new TempDir())
+            {
+                var llm = new FakeLlmProvider { Delay = TimeSpan.FromMilliseconds(200) }.Enqueue("OK");
+                var host = TwoProfileHost(tmp.Root, llm);
+                Sta.Run(() =>
+                {
+                    using (var f = new SettingsForm(host))
+                    {
+                        var test = f.TestConnectionAsync();
+                        f.ProfileList.SelectedIndex = 1;   // 결과가 오기 전에 다른 프로필로 바꾼다
+                        Pump(test);
+                        Assert.Single(llm.Requests);
+                        Assert.Equal("", f.TestResultLabel.Text);
+                    }
+                });
+            }
+        }
+
+        [Fact]
+        public void TestConnection_FormDisposed_CancelsRequest()
+        {
+            using (var tmp = new TempDir())
+            {
+                var llm = new FakeLlmProvider { Delay = TimeSpan.FromSeconds(30) }.Enqueue("OK");
+                var host = TwoProfileHost(tmp.Root, llm);
+                Sta.Run(() =>
+                {
+                    var f = new SettingsForm(host);
+                    var test = f.TestConnectionAsync();
+                    f.Dispose();
+                    f.Dispose();   // 두 번 폐기해도 예외가 없다
+                    Pump(test);   // 취소되어 곧바로 끝나고, 닫힌 창에 쓰지 않으며 예외도 없다
+                    Assert.True(llm.Tokens.Single().IsCancellationRequested);
+                });
+                Assert.False(File.Exists(host.Log.CurrentPath), "취소는 오류로 기록하지 않는다");
             }
         }
     }

@@ -16,7 +16,9 @@ namespace TechSupportReply.App.SettingsUi
     public sealed class SettingsForm : Form
     {
         private readonly ISettingsHost _host;
-        private readonly FileLog _log = new FileLog(null);
+        private readonly FileLog _log;
+        // 창을 닫으면 취소한다(진행 중인 연결 테스트가 닫힌 창에 결과를 쓰지 않게).
+        private readonly CancellationTokenSource _closing = new CancellationTokenSource();
         private bool _loadingProfile;
 
         // 사용자
@@ -61,6 +63,7 @@ namespace TechSupportReply.App.SettingsUi
         public SettingsForm(ISettingsHost host)
         {
             _host = host ?? throw new ArgumentNullException(nameof(host));
+            _log = host.Log ?? throw new ArgumentException("ISettingsHost.Log가 없습니다.", nameof(host));
             Editor = new SettingsEditor(host.Settings, host.Secrets);
             Text = "기술지원 답변 — 설정";
             Font = new Font("맑은 고딕", 9f);
@@ -102,6 +105,7 @@ namespace TechSupportReply.App.SettingsUi
         internal SettingsEditor Editor { get; }
         internal ComboBox ModelCombo => _pModel;
         internal Label ModelsResultLabel => _pModelsResult;
+        internal Label TestResultLabel => _pTestResult;
         internal TimeSpan ModelListTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
         /// <summary>
@@ -149,6 +153,58 @@ namespace TechSupportReply.App.SettingsUi
             {
                 if (!IsDisposed) _pLoadModels.Enabled = true;
             }
+        }
+
+        /// <summary>
+        /// [연결 테스트]. 결과가 오기 전에 다른 프로필을 골랐거나 창을 닫았으면 결과를 버린다(창을 닫으면 요청도 취소). 예외를 던지지 않는다.
+        /// </summary>
+        internal async Task TestConnectionAsync()
+        {
+            string requestedId = null;
+            bool Stale() => IsDisposed || _closing.IsCancellationRequested || (requestedId != null && _currentProfileId != requestedId);
+            var started = false;
+            try
+            {
+                var p = CurrentProfileWithKey(out var key);
+                if (p == null) return;
+                requestedId = p.Id;
+                if (string.IsNullOrWhiteSpace(key)) { ShowTest(false, NoKeyMessage); return; }
+                _pTest.Enabled = false;
+                started = true;
+                ShowTest(true, "확인 중…");
+                var llm = _host.CreateLlmForTest(p, key);
+                var r = await LlmConnectionTester.TestAsync(llm, _closing.Token);
+                if (!Stale()) ShowTest(r.Success, r.Message);
+            }
+            catch (OperationCanceledException) when (Stale())
+            {
+                // 창을 닫아 취소했다.
+            }
+            catch (Exception ex)
+            {
+                _log.Error("연결 테스트 실패", ex);
+                if (!Stale()) ShowTest(false, ex is LlmException le ? le.UserMessage : ex.Message);
+            }
+            finally
+            {
+                if (started && !IsDisposed) _pTest.Enabled = true;
+            }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            _closing.Cancel();
+            base.OnFormClosed(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && !IsDisposed)   // Dispose를 두 번 불러도 폐기된 CTS를 다시 취소하지 않는다
+            {
+                _closing.Cancel();
+                _closing.Dispose();
+            }
+            base.Dispose(disposing);
         }
 
         /// <summary>이벤트 처리기 본문을 감싸 예외를 로그에 남기고 한국어 메시지로 알린다.</summary>
@@ -280,31 +336,7 @@ namespace TechSupportReply.App.SettingsUi
             _pProvider.SelectedIndexChanged += (s, e) => Guard(UpdateProviderFields, "공급자 변경");
             _pKeyDirect.CheckedChanged += (s, e) => Guard(UpdateKeyFields, "키 방식 변경");
             _pName.Leave += (s, e) => Guard(() => { StoreProfile(); RefreshProfileList(_currentProfileId); }, "표시명 변경");
-            _pTest.Click += async (s, e) =>
-            {
-                var started = false;
-                try
-                {
-                    var p = CurrentProfileWithKey(out var key);
-                    if (p == null) return;
-                    if (string.IsNullOrWhiteSpace(key)) { ShowTest(false, NoKeyMessage); return; }
-                    _pTest.Enabled = false;
-                    started = true;
-                    ShowTest(true, "확인 중…");
-                    var llm = _host.CreateLlmForTest(p, key);
-                    var r = await LlmConnectionTester.TestAsync(llm, CancellationToken.None);
-                    ShowTest(r.Success, r.Message);
-                }
-                catch (Exception ex)
-                {
-                    _log.Error("연결 테스트 실패", ex);
-                    ShowTest(false, ex is LlmException le ? le.UserMessage : ex.Message);
-                }
-                finally
-                {
-                    if (started) _pTest.Enabled = true;
-                }
-            };
+            _pTest.Click += async (s, e) => await TestConnectionAsync();
             _pLoadModels.Click += async (s, e) => await LoadModelsAsync();
             return page;
         }
