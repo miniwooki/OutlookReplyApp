@@ -19,6 +19,8 @@ namespace TechSupportReply.AddIn.Outlook
             public ReplyTaskPaneControl Control;
             public ReplyPanePresenter Presenter;
             public string EntryId;
+            /// <summary>원본 메일의 저장소 ID. 없으면(null) 기본 저장소에서 찾는다.</summary>
+            public string StoreId;
             public Action Unsubscribe;
         }
 
@@ -43,10 +45,12 @@ namespace TechSupportReply.AddIn.Outlook
 
             MailSnapshot snapshot;
             string entryId;
+            string storeId;
             try
             {
                 snapshot = MailExtractor.Extract(mail, _addIn.Services.Log);
                 entryId = mail.EntryID;
+                storeId = MailExtractor.StoreIdOf(mail, _addIn.Services.Log);
             }
             finally
             {
@@ -55,6 +59,7 @@ namespace TechSupportReply.AddIn.Outlook
 
             var entry = GetOrCreate(window);
             entry.EntryId = entryId;
+            entry.StoreId = storeId;
             entry.Pane.Visible = true;
             // Post는 핸들이 없으면 스트리밍 조각을 버린다. 프레젠터를 쓰기 전에 핸들을 만들어 둔다.
             _ = entry.Control.Handle;
@@ -154,7 +159,10 @@ namespace TechSupportReply.AddIn.Outlook
             try
             {
                 session = _addIn.Application.Session;
-                item = session.GetItemFromID(entry.EntryId);
+                // 공유 사서함·PST의 메일은 StoreID 없이 찾으면 기본 저장소만 뒤져 "찾을 수 없음"이 된다.
+                item = string.IsNullOrEmpty(entry.StoreId)
+                    ? session.GetItemFromID(entry.EntryId)
+                    : session.GetItemFromID(entry.EntryId, entry.StoreId);
                 if (!(item is OutlookApi.MailItem mail)) throw new InvalidOperationException("원본 메일을 찾을 수 없습니다(이동 또는 삭제되었을 수 있습니다).");
                 ReplyDraftWriter.CreateReplyAll(mail, text);
             }

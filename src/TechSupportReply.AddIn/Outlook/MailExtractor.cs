@@ -67,6 +67,29 @@ namespace TechSupportReply.AddIn.Outlook
             return snapshot;
         }
 
+        /// <summary>
+        /// 메일이 들어 있는 저장소(사서함·PST)의 StoreID. 공유 사서함·보조 저장소의 메일은 GetItemFromID에 이 값이 있어야 찾을 수 있다.
+        /// 폴더가 아니거나(예: 파일로 연 .msg) 읽지 못하면 null. 얻은 폴더 RCW는 바로 해제한다.
+        /// </summary>
+        public static string StoreIdOf(OutlookApi.MailItem mail, FileLog log)
+        {
+            object parent = null;
+            try
+            {
+                parent = mail.Parent;
+                return parent is OutlookApi.MAPIFolder folder ? folder.StoreID : null;
+            }
+            catch (COMException ex)
+            {
+                log.Warn($"메일 저장소 ID를 읽지 못했습니다(기본 저장소에서 찾습니다): {ex.Message}");
+                return null;
+            }
+            finally
+            {
+                if (parent != null && Marshal.IsComObject(parent)) Marshal.ReleaseComObject(parent);
+            }
+        }
+
         private static string SenderAddress(OutlookApi.MailItem mail)
         {
             try
