@@ -2,7 +2,7 @@
 .SYNOPSIS
   빌드 폴더를 사용자 폴더로 복사하고 Outlook 애드인으로 등록한다(방법 B, 관리자 권한 불필요).
 .EXAMPLE
-  .\install-addin.ps1 -Source \server\deploy\TechSupportReply\bin
+  .\install-addin.ps1 -Source C:\Deploy\TechSupportReply\bin
   .\install-addin.ps1 -Uninstall
 #>
 param(

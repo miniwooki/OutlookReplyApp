@@ -2,7 +2,7 @@
 .SYNOPSIS
   ClickOnce로 애드인을 게시한다(방법 A). 팀원은 게시 폴더의 TechSupportReply.AddIn.vsto를 실행해 설치하고, 이후 Outlook 시작 시 자동 업데이트된다.
 .EXAMPLE
-  .\publish-addin.ps1 -PublishDir \server\deploy\TechSupportReply
+  .\publish-addin.ps1 -PublishDir \\server\deploy\TechSupportReply
 #>
 param(
     [Parameter(Mandatory)][string]$PublishDir,
