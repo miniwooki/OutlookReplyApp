@@ -8,6 +8,16 @@ namespace TechSupportReply.Tests.Core.Llm
     public class LlmProviderFactoryTests
     {
         [Fact]
+        public void ResolveEnvKey_TrimsValue_AndReturnsNullWhenMissing()
+        {
+            var p = new LlmProfile { ApiKeyEnvVar = " K " };
+            Assert.Equal("v", LlmProviderFactory.ResolveEnvKey(p, n => n == "K" ? " v " : null));
+            Assert.Null(LlmProviderFactory.ResolveEnvKey(p, _ => "  "));
+            Assert.Null(LlmProviderFactory.ResolveEnvKey(p, null));
+            Assert.Null(LlmProviderFactory.ResolveEnvKey(new LlmProfile { ApiKeyEnvVar = "" }, _ => "x"));
+        }
+
+        [Fact]
         public void Create_ByProviderKind()
         {
             Assert.IsType<AnthropicProvider>(LlmProviderFactory.Create(

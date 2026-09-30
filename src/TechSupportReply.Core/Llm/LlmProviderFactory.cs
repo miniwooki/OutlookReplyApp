@@ -20,13 +20,19 @@ namespace TechSupportReply.Core.Llm
         public string ResolveApiKey(LlmProfile profile)
         {
             if (profile == null) throw new ArgumentNullException(nameof(profile));
-            if (!string.IsNullOrWhiteSpace(profile.ApiKeyEnvVar))
-            {
-                var fromEnv = _getEnv(profile.ApiKeyEnvVar.Trim());
-                if (!string.IsNullOrWhiteSpace(fromEnv)) return fromEnv.Trim();
-            }
+            var fromEnv = ResolveEnvKey(profile, _getEnv);
+            if (!string.IsNullOrEmpty(fromEnv)) return fromEnv;
             var stored = _secrets.Get(profile.SecretId);
             return string.IsNullOrWhiteSpace(stored) ? null : stored;
+        }
+
+        /// <summary>프로필의 환경 변수에서 API 키를 읽는다(앞뒤 공백 제거). 변수명이 없거나 값이 비면 null.</summary>
+        public static string ResolveEnvKey(LlmProfile profile, Func<string, string> getEnv)
+        {
+            if (profile == null) throw new ArgumentNullException(nameof(profile));
+            if (string.IsNullOrWhiteSpace(profile.ApiKeyEnvVar)) return null;
+            var fromEnv = getEnv?.Invoke(profile.ApiKeyEnvVar.Trim());
+            return string.IsNullOrWhiteSpace(fromEnv) ? null : fromEnv.Trim();
         }
 
         public ILlmProvider Create(LlmProfile profile)
