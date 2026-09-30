@@ -40,8 +40,24 @@ namespace TechSupportReply.Tests.TestSupport
             return new KnowledgeSession(ProductCatalog.CreateDefault(), Retriever, p => "", WarningsForSession);
         }
 
+        /// <summary>null이면 모든 프로필에 키가 있다고 본다.</summary>
+        public Func<LlmProfile, bool> KeyCheck { get; set; }
+        public Exception SaveLastProfileThrows { get; set; }
+        public List<string> SavedLastProfileIds { get; } = new List<string>();
+        public List<string> CreatedProfileIds { get; } = new List<string>();
+
+        public bool HasUsableKey(LlmProfile profile) => KeyCheck == null || KeyCheck(profile);
+
+        public void SaveLastProfile(string profileId)
+        {
+            if (SaveLastProfileThrows != null) throw SaveLastProfileThrows;
+            SavedLastProfileIds.Add(profileId);
+            Settings.LastProfileId = profileId;
+        }
+
         public ILlmProvider CreateLlm(string profileId)
         {
+            CreatedProfileIds.Add(profileId);
             if (CreateLlmThrows != null) throw CreateLlmThrows;
             return Llm;
         }

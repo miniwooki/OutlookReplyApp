@@ -87,7 +87,7 @@ namespace TechSupportReply.Core.Llm
             return (messages, options);
         }
 
-        private static LlmException Translate(Exception ex)
+        internal static LlmException Translate(Exception ex)
         {
             switch (ex)
             {

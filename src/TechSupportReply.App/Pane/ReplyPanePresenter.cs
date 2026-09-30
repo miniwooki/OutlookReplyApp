@@ -25,6 +25,11 @@ namespace TechSupportReply.App.Pane
         private MailSnapshot _mail;
         private int _mailVersion;
         private bool _userChoseProduct;
+        private bool _hasUsableProfile;
+        private int _profilesVersion;
+
+        public const string NoUsableProfileMessage =
+            "API 키가 등록된 LLM 프로필이 없습니다. [설정] → LLM 프로필에서 키를 입력하거나 환경 변수를 설정한 뒤 다시 시도하세요.";
 
         public ReplyPanePresenter(IReplyPaneView view, IReplyBackend backend)
         {
@@ -38,6 +43,7 @@ namespace TechSupportReply.App.Pane
             _view.StopRequested += (s, e) => Guard("생성 중지", Stop);
             _view.DraftRequested += (s, e) => Guard("회신 초안 요청", RequestDraft);
             _view.ProductChangedByUser += (s, e) => _userChoseProduct = true;
+            _view.ProfileChangedByUser += (s, e) => RememberProfile();
         }
 
         /// <summary>이벤트 핸들러에서 예외가 새어 나가 Outlook을 흔들지 않도록 로그와 한국어 메시지로 바꾼다.</summary>
@@ -83,7 +89,8 @@ namespace TechSupportReply.App.Pane
                 _view.SetStatus("제품군을 판별하는 중…", false);
 
                 var settings = _backend.Settings;
-                _view.SetProfiles(settings.Profiles, settings.ResolveProfile(settings.DefaultProfileId)?.Id);
+                await RefreshProfilesAsync();
+                if (version != _mailVersion) return;
                 var session = await Task.Run(() => _backend.GetSession(), cts.Token);
                 if (version != _mailVersion) return;
 
@@ -109,7 +116,8 @@ namespace TechSupportReply.App.Pane
                 if (version != _mailVersion) return;
                 if (!_userChoseProduct) _view.SelectProduct(result.ProductId);
                 _view.SetClassification(Describe(session.Catalog, result));
-                if (llmProblem != null) _view.SetStatus("키워드로 제품군을 판별했습니다. " + llmProblem, true);
+                if (!_hasUsableProfile) _view.SetStatus(NoUsableProfileMessage, true);
+                else if (llmProblem != null) _view.SetStatus("키워드로 제품군을 판별했습니다. " + llmProblem, true);
                 else _view.SetStatus("제품군을 확인하거나 바꾼 뒤 [답변 생성]을 누르세요.", false);
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
@@ -134,6 +142,11 @@ namespace TechSupportReply.App.Pane
             if (_mail == null)
             {
                 _view.SetStatus("메일을 먼저 선택한 뒤 리본의 [기술지원 답변]을 누르세요.", true);
+                return;
+            }
+            if (!_hasUsableProfile)
+            {
+                _view.SetStatus(NoUsableProfileMessage, true);
                 return;
             }
 
@@ -193,6 +206,61 @@ namespace TechSupportReply.App.Pane
             finally
             {
                 if (version == _mailVersion) SetState(PaneState.Idle);
+            }
+        }
+
+        /// <summary>
+        /// 키가 있는 프로필만 드롭다운에 다시 채우고 [답변 생성] 사용 가능 여부를 정한다. 메일을 불러올 때와 설정을 저장한 뒤 호출한다.
+        /// 키 확인(secrets.dat·레지스트리)은 백그라운드에서 한다. 늦게 끝난 이전 호출의 결과는 버린다. 예외를 던지지 않는다.
+        /// </summary>
+        public async Task RefreshProfilesAsync()
+        {
+            var version = ++_profilesVersion;
+            try
+            {
+                var settings = _backend.Settings;
+                var usable = await Task.Run(() => settings.Profiles.Where(IsUsable).ToList());
+                if (version != _profilesVersion) return;
+                _hasUsableProfile = usable.Count > 0;
+                _view.SetProfiles(usable, PickProfile(settings, usable)?.Id);
+                _view.SetGenerateAvailable(_hasUsableProfile);
+            }
+            catch (Exception ex)
+            {
+                ReportHandlerFailure("LLM 프로필 목록 갱신", ex);
+            }
+        }
+
+        /// <summary>처음 선택: 마지막 선택(키 있음) → 기본 답변 프로필(키 있음) → 키 있는 첫 프로필.</summary>
+        internal static LlmProfile PickProfile(AppSettings s, IReadOnlyList<LlmProfile> usable) =>
+            usable.FirstOrDefault(p => p.Id == s.LastProfileId)
+            ?? usable.FirstOrDefault(p => p.Id == s.DefaultProfileId)
+            ?? usable.FirstOrDefault();
+
+        private bool IsUsable(LlmProfile profile)
+        {
+            try
+            {
+                return _backend.HasUsableKey(profile);
+            }
+            catch (Exception ex)
+            {
+                _backend.Log.Warn($"'{profile.DisplayName}' 프로필 키 확인 실패: {ex.Message}");
+                return false;
+            }
+        }
+
+        private void RememberProfile()
+        {
+            try
+            {
+                var id = _view.SelectedProfileId;
+                if (string.IsNullOrEmpty(id)) return;
+                _backend.SaveLastProfile(id);
+            }
+            catch (Exception ex)
+            {
+                _backend.Log.Warn("마지막으로 고른 프로필을 저장하지 못했습니다: " + ex.Message);
             }
         }
 

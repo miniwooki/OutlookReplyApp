@@ -44,6 +44,8 @@ namespace TechSupportReply.Core.Settings
         public List<LlmProfile> Profiles { get; set; } = new List<LlmProfile>();
         public string DefaultProfileId { get; set; } = "";
         public string ClassifierProfileId { get; set; } = "";
+        /// <summary>작업창에서 사용자가 마지막으로 고른 답변 프로필. 키가 없어졌거나 삭제되면 DefaultProfileId로 대체한다.</summary>
+        public string LastProfileId { get; set; } = "";
         public int ReferenceTopK { get; set; } = 8;
         public int StyleExampleTopK { get; set; } = 3;
         public int MaxMailChars { get; set; } = 30000;

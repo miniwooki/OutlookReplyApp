@@ -18,6 +18,20 @@ namespace TechSupportReply.Tests.TestSupport
         public event EventHandler StopRequested;
         public event EventHandler DraftRequested;
         public event EventHandler ProductChangedByUser;
+        public event EventHandler ProfileChangedByUser;
+
+        public bool GenerateAvailable { get; private set; } = true;
+
+        public void SetGenerateAvailable(bool available)
+        {
+            lock (_lock) GenerateAvailable = available;
+        }
+
+        public void UserChangesProfile(string id)
+        {
+            SelectedProfileId = id;
+            ProfileChangedByUser?.Invoke(this, EventArgs.Empty);
+        }
 
         public string Subject { get; private set; }
         public List<string> ProductIds { get; private set; } = new List<string>();

@@ -61,6 +61,12 @@ namespace TechSupportReply.AddIn.Outlook
             _ = entry.Presenter.LoadMailAsync(snapshot);
         }
 
+        /// <summary>설정을 저장한 뒤 호출한다. RefreshProfilesAsync는 예외를 던지지 않는다.</summary>
+        public void RefreshProfiles()
+        {
+            foreach (var entry in _panes.Values.ToList()) _ = entry.Presenter.RefreshProfilesAsync();
+        }
+
         public void Dispose()
         {
             foreach (var window in _panes.Keys.ToList()) Remove(window);

@@ -20,12 +20,17 @@ namespace TechSupportReply.App.Pane
         event EventHandler DraftRequested;
         /// <summary>사용자가 드롭다운에서 제품을 직접 바꿨을 때만 발생한다(코드로 선택할 때는 발생하지 않음).</summary>
         event EventHandler ProductChangedByUser;
+        /// <summary>사용자가 LLM 프로필 드롭다운을 직접 바꿨을 때만 발생한다(코드로 선택할 때는 발생하지 않음).</summary>
+        event EventHandler ProfileChangedByUser;
 
         void ShowMail(string subject, string sender);
         void SetProducts(IReadOnlyList<ProductDefinition> products, string selectedId);
         void SelectProduct(string productId);
         void SetClassification(string text);
+        /// <summary>키가 있는 프로필만 받는다. 화면에는 "표시명 · 모델"로 보인다.</summary>
         void SetProfiles(IReadOnlyList<LlmProfile> profiles, string selectedId);
+        /// <summary>false면 상태와 관계없이 [답변 생성]을 끈다(키가 있는 프로필이 없을 때).</summary>
+        void SetGenerateAvailable(bool available);
         void SetState(PaneState state);
         void ClearReply();
         void AppendReply(string delta);

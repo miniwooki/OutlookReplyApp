@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Globalization;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using TechSupportReply.Core.Diagnostics;
 using TechSupportReply.Core.Llm;
@@ -27,7 +28,10 @@ namespace TechSupportReply.App.SettingsUi
         // 프로필
         private readonly TextBox _pName = new TextBox { Dock = DockStyle.Fill };
         private readonly ComboBox _pProvider = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
-        private readonly TextBox _pModel = new TextBox { Dock = DockStyle.Fill };
+        private readonly ComboBox _pModel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Dock = DockStyle.Fill };
+        private readonly Button _pLoadModels = new Button { Text = "모델 목록 불러오기", AutoSize = true };
+        private readonly Label _pModelsResult = new Label { AutoSize = true, MaximumSize = new Size(420, 0) };
+        private const string NoKeyMessage = "API 키가 없습니다. 키를 입력하거나 환경 변수를 확인하세요.";
         private readonly TextBox _pBaseUrl = new TextBox { Dock = DockStyle.Fill };
         private readonly NumericUpDown _pMaxTokens = new NumericUpDown { Minimum = 256, Maximum = 128000, Increment = 1000, Dock = DockStyle.Left, Width = 100 };
         private readonly ComboBox _pEffort = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Left, Width = 100 };
@@ -96,6 +100,56 @@ namespace TechSupportReply.App.SettingsUi
         }
 
         internal SettingsEditor Editor { get; }
+        internal ComboBox ModelCombo => _pModel;
+        internal Label ModelsResultLabel => _pModelsResult;
+        internal TimeSpan ModelListTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// [모델 목록 불러오기]. 입력 중인 값을 반영한 프로필 사본과 키로 호스트에 목록을 요청하고(백그라운드), 결과를 모델 드롭다운에 채운다.
+        /// 모델 칸의 현재 값은 지우지 않는다(목록에 없는 모델도 직접 입력해 쓸 수 있다). 예외를 던지지 않는다.
+        /// </summary>
+        internal async Task LoadModelsAsync()
+        {
+            string requestedId = null;
+            // 그사이 창을 닫았거나 다른 프로필을 골랐으면 결과를 버린다.
+            bool Stale() => IsDisposed || (requestedId != null && _currentProfileId != requestedId);
+            _pLoadModels.Enabled = false;
+            try
+            {
+                var p = CurrentProfileWithKey(out var key);
+                if (p == null) return;
+                requestedId = p.Id;
+                if (string.IsNullOrWhiteSpace(key)) { ShowResult(_pModelsResult, false, NoKeyMessage); return; }
+                var snapshot = new LlmProfile
+                {
+                    Id = p.Id, DisplayName = p.DisplayName, Provider = p.Provider, Model = p.Model, BaseUrl = p.BaseUrl, WorkspaceId = p.WorkspaceId,
+                };
+                ShowResult(_pModelsResult, true, "모델 목록을 불러오는 중…");
+                IReadOnlyList<ModelListing> models;
+                using (var cts = new CancellationTokenSource(ModelListTimeout))
+                    models = await Task.Run(() => _host.ListModelsAsync(snapshot, key, cts.Token), cts.Token);
+                if (Stale()) return;
+                FillModels(models ?? new ModelListing[0]);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!Stale()) ShowResult(_pModelsResult, false, "응답 시간이 초과되었습니다. 네트워크 또는 Base URL을 확인하세요.");
+            }
+            catch (LlmException ex)
+            {
+                _log.Warn($"모델 목록 불러오기 실패({ex.Kind}): {ex.Message}");
+                if (!Stale()) ShowResult(_pModelsResult, false, ex.UserMessage);
+            }
+            catch (Exception ex)
+            {
+                _log.Error("모델 목록 불러오기 실패", ex);
+                if (!Stale()) ShowResult(_pModelsResult, false, "모델 목록을 불러오지 못했습니다: " + ex.Message);
+            }
+            finally
+            {
+                if (!IsDisposed) _pLoadModels.Enabled = true;
+            }
+        }
 
         /// <summary>이벤트 처리기 본문을 감싸 예외를 로그에 남기고 한국어 메시지로 알린다.</summary>
         private void Guard(Action action, string what)
@@ -177,7 +231,8 @@ namespace TechSupportReply.App.SettingsUi
             var editor = Grid();
             AddRow(editor, "표시명", _pName);
             AddRow(editor, "공급자", _pProvider);
-            AddRow(editor, "모델", _pModel);
+            AddRow(editor, "모델", InlineRow(_pModel, _pLoadModels));
+            AddRow(editor, "", _pModelsResult);
             AddRow(editor, "Base URL", _pBaseUrl);
             AddRow(editor, "", new Label { Text = "비워 두면 공급자 기본값. xAI는 https://api.x.ai/v1", AutoSize = true, ForeColor = SystemColors.GrayText });
             AddRow(editor, "최대 토큰", _pMaxTokens);
@@ -230,11 +285,9 @@ namespace TechSupportReply.App.SettingsUi
                 var started = false;
                 try
                 {
-                    StoreProfile();
-                    var p = SelectedProfile();
+                    var p = CurrentProfileWithKey(out var key);
                     if (p == null) return;
-                    var key = Editor.ResolveKey(p, _host.GetEnv);
-                    if (string.IsNullOrWhiteSpace(key)) { ShowTest(false, "API 키가 없습니다. 키를 입력하거나 환경 변수를 확인하세요."); return; }
+                    if (string.IsNullOrWhiteSpace(key)) { ShowTest(false, NoKeyMessage); return; }
                     _pTest.Enabled = false;
                     started = true;
                     ShowTest(true, "확인 중…");
@@ -252,6 +305,7 @@ namespace TechSupportReply.App.SettingsUi
                     if (started) _pTest.Enabled = true;
                 }
             };
+            _pLoadModels.Click += async (s, e) => await LoadModelsAsync();
             return page;
         }
 
@@ -295,6 +349,8 @@ namespace TechSupportReply.App.SettingsUi
             _currentProfileId = p?.Id;
             _profileEditor.Enabled = p != null;
             _pTestResult.Text = "";
+            _pModel.Items.Clear();
+            _pModelsResult.Text = "";
             if (p == null) return;
             _pName.Text = p.DisplayName;
             _pProvider.SelectedIndex = p.Provider == LlmProviderKind.Anthropic ? 0 : 1;
@@ -346,24 +402,49 @@ namespace TechSupportReply.App.SettingsUi
             _pEnvVar.Enabled = _pKeyEnv.Checked;
         }
 
-        private void ShowTest(bool ok, string message)
+        private void ShowTest(bool ok, string message) => ShowResult(_pTestResult, ok, message);
+
+        private static void ShowResult(Label label, bool ok, string message)
         {
-            _pTestResult.ForeColor = ok ? Color.SeaGreen : Color.Firebrick;
-            _pTestResult.Text = message;
+            label.ForeColor = ok ? Color.SeaGreen : Color.Firebrick;
+            label.Text = message;
+        }
+
+        /// <summary>편집 중인 값을 반영한 뒤 선택한 프로필과 [연결 테스트]·[모델 목록 불러오기]에 쓸 키(환경 변수 → 입력 중 → 저장됨)를 돌려준다.</summary>
+        private LlmProfile CurrentProfileWithKey(out string key)
+        {
+            StoreProfile();
+            var p = SelectedProfile();
+            key = p == null ? null : Editor.ResolveKey(p, _host.GetEnv);
+            return p;
+        }
+
+        private void FillModels(IReadOnlyList<ModelListing> models)
+        {
+            var current = _pModel.Text.Trim();
+            _pModel.BeginUpdate();
+            _pModel.Items.Clear();
+            foreach (var m in models) _pModel.Items.Add(m.Id);
+            _pModel.EndUpdate();
+            _pModel.Text = current;
+            if (models.Count == 0)
+            {
+                ShowResult(_pModelsResult, false, "이 키로 쓸 수 있는 모델이 없습니다. 키 권한과 Base URL을 확인하세요.");
+                return;
+            }
+            var note = models.Any(m => string.Equals(m.Id, current, StringComparison.OrdinalIgnoreCase))
+                ? ""
+                : " 현재 모델은 목록에 없습니다(직접 입력한 값도 그대로 쓸 수 있습니다).";
+            ShowResult(_pModelsResult, true, $"모델 {models.Count}개를 불러왔습니다. 목록에서 고르거나 직접 입력하세요.{note}");
         }
 
         // ---------- 지식 폴더 ----------
         private TabPage BuildKnowledgeTab()
         {
             var browse = new Button { Text = "찾아보기…", AutoSize = true };
-            var rootRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true, Margin = Padding.Empty };
-            rootRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            rootRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            rootRow.Controls.Add(_ragRoot, 0, 0);
-            rootRow.Controls.Add(browse, 1, 0);
 
             var t = Grid();
-            AddRow(t, "RAG 루트", rootRow);
+            AddRow(t, "RAG 루트", InlineRow(_ragRoot, browse));
             AddRow(t, "", new Label { Text = @"예: \\server\KB — 관리자가 Indexer로 색인을 만든 공유 폴더", AutoSize = true, ForeColor = SystemColors.GrayText });
             AddRow(t, "근거 문서 수", _refTopK);
             AddRow(t, "문체 예시 수", _styleTopK);
@@ -463,6 +544,17 @@ namespace TechSupportReply.App.SettingsUi
             var row = t.RowCount++;
             t.Controls.Add(new Label { Text = caption, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 6, 0) }, 0, row);
             t.Controls.Add(control, 1, row);
+        }
+
+        /// <summary>입력 칸(남는 폭 전부)과 옆 버튼을 한 줄에 놓는다.</summary>
+        private static TableLayoutPanel InlineRow(Control main, Control side)
+        {
+            var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true, Margin = Padding.Empty };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.Controls.Add(main, 0, 0);
+            row.Controls.Add(side, 1, 0);
+            return row;
         }
 
         private static TabPage Page(string title, Control content)

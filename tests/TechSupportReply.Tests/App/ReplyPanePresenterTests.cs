@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using TechSupportReply.App.Pane;
 using TechSupportReply.Core.Knowledge;
 using TechSupportReply.Core.Llm;
+using TechSupportReply.Core.Settings;
 using TechSupportReply.Tests.TestSupport;
 using Xunit;
 
@@ -15,6 +16,100 @@ namespace TechSupportReply.Tests.App
         private const string DynaJson = "{\"productId\":\"ls-dyna\",\"confidence\":0.9,\"reason\":\"LS-DYNA 접촉 문의\"}";
         private static readonly global::TechSupportReply.Core.Models.MailSnapshot Mail =
             Mails.Create("접촉 경고 문의", "*CONTACT_AUTOMATIC_SURFACE_TO_SURFACE 초기 관통 경고가 d3hsp에 나옵니다.");
+
+        private static FakeBackend ThreeProfiles(FakeLlmProvider llm)
+        {
+            var backend = new FakeBackend(llm);
+            backend.Settings.Profiles.Add(new LlmProfile { Id = "p2", DisplayName = "Claude", Provider = LlmProviderKind.Anthropic, Model = "claude-opus-5" });
+            backend.Settings.Profiles.Add(new LlmProfile { Id = "p3", DisplayName = "xAI", Provider = LlmProviderKind.OpenAI, Model = "grok-4" });
+            return backend;
+        }
+
+        [Theory]
+        [InlineData("p3", "p1", "p3")]
+        [InlineData("p2", "p3", "p3")]
+        [InlineData("p2", "p2", "p1")]
+        [InlineData("", "", "p1")]
+        public async Task LoadMail_ListsOnlyProfilesWithKeys_AndSelectsLastThenDefaultThenFirst(string lastId, string defaultId, string expected)
+        {
+            var view = new FakePaneView();
+            var backend = ThreeProfiles(new FakeLlmProvider().Enqueue(DynaJson));
+            backend.KeyCheck = profile => profile.Id != "p2";
+            backend.Settings.LastProfileId = lastId;
+            backend.Settings.DefaultProfileId = defaultId;
+
+            await new ReplyPanePresenter(view, backend).LoadMailAsync(Mail);
+
+            Assert.Equal(new[] { "p1", "p3" }, view.ProfileIds);
+            Assert.Equal(expected, view.SelectedProfileId);
+            Assert.True(view.GenerateAvailable);
+        }
+
+        [Fact]
+        public async Task NoProfileWithKey_ShowsSettingsHint_AndGenerateDoesNothing()
+        {
+            var view = new FakePaneView();
+            var llm = new FakeLlmProvider().Enqueue(DynaJson);
+            var p = new ReplyPanePresenter(view, new FakeBackend(llm) { KeyCheck = _ => false });
+            await p.LoadMailAsync(Mail);
+
+            Assert.Empty(view.ProfileIds);
+            Assert.Null(view.SelectedProfileId);
+            Assert.False(view.GenerateAvailable);
+            Assert.True(view.StatusIsError);
+            Assert.Contains("[설정]", view.Status);
+
+            var requests = llm.Requests.Count;
+            await p.GenerateAsync();
+
+            Assert.Equal(requests, llm.Requests.Count);
+            Assert.Equal(ReplyPanePresenter.NoUsableProfileMessage, view.Status);
+            Assert.Equal(PaneState.Idle, view.State);
+        }
+
+        [Fact]
+        public async Task UserProfileChoice_IsRemembered_AndUsedForGeneration()
+        {
+            var view = new FakePaneView();
+            var backend = ThreeProfiles(new FakeLlmProvider().Enqueue(DynaJson).Enqueue("답"));
+            var p = new ReplyPanePresenter(view, backend);
+            await p.LoadMailAsync(Mail);
+
+            view.UserChangesProfile("p3");
+            await p.GenerateAsync();
+
+            Assert.Equal(new[] { "p3" }, backend.SavedLastProfileIds);
+            Assert.Equal("p3", backend.Settings.LastProfileId);
+            Assert.Equal("p3", backend.CreatedProfileIds.Last());
+            Assert.Equal("답", view.ReplyText);
+        }
+
+        [Fact]
+        public async Task RememberProfile_Failure_IsLoggedNotThrown()
+        {
+            var view = new FakePaneView();
+            var backend = new FakeBackend(new FakeLlmProvider().Enqueue(DynaJson)) { SaveLastProfileThrows = new System.IO.IOException("잠김") };
+            await new ReplyPanePresenter(view, backend).LoadMailAsync(Mail);
+
+            Assert.Null(Record.Exception(() => view.UserChangesProfile("p1")));
+        }
+
+        [Fact]
+        public async Task RefreshProfiles_AfterKeyAdded_EnablesGenerate()
+        {
+            var view = new FakePaneView();
+            var backend = new FakeBackend(new FakeLlmProvider().Enqueue(DynaJson)) { KeyCheck = _ => false };
+            var p = new ReplyPanePresenter(view, backend);
+            await p.LoadMailAsync(Mail);
+            Assert.False(view.GenerateAvailable);
+
+            backend.KeyCheck = null;
+            await p.RefreshProfilesAsync();
+
+            Assert.True(view.GenerateAvailable);
+            Assert.Equal(new[] { "p1" }, view.ProfileIds);
+            Assert.Equal("p1", view.SelectedProfileId);
+        }
 
         [Fact]
         public async Task LoadMail_ClassifiesWithLlm_AndSelectsProduct()

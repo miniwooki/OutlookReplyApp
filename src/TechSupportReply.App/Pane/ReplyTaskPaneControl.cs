@@ -27,6 +27,9 @@ namespace TechSupportReply.App.Pane
         private readonly Label _warnings = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = Color.DarkOrange, MaximumSize = new Size(1000, 0) };
         private readonly LinkLabel _settings = new LinkLabel { Text = "설정…", AutoSize = true, Anchor = AnchorStyles.Right };
 
+        private PaneState _state = PaneState.Idle;
+        private bool _generateAvailable = true;
+
         internal readonly ComboBox ProductCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
         internal readonly ComboBox ProfileCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
         internal readonly Button GenerateButton = new Button { Text = "답변 생성", AutoSize = true };
@@ -87,6 +90,7 @@ namespace TechSupportReply.App.Pane
             StopButton.Click += (s, e) => StopRequested?.Invoke(this, EventArgs.Empty);
             DraftButton.Click += (s, e) => DraftRequested?.Invoke(this, EventArgs.Empty);
             ProductCombo.SelectionChangeCommitted += (s, e) => ProductChangedByUser?.Invoke(this, EventArgs.Empty);
+            ProfileCombo.SelectionChangeCommitted += (s, e) => ProfileChangedByUser?.Invoke(this, EventArgs.Empty);
             _settings.LinkClicked += (s, e) => SettingsRequested?.Invoke(this, EventArgs.Empty);
             ShowMail("메일을 선택한 뒤 리본의 [기술지원 답변]을 누르세요.", "");
             SetState(PaneState.Idle);
@@ -96,6 +100,7 @@ namespace TechSupportReply.App.Pane
         public event EventHandler StopRequested;
         public event EventHandler DraftRequested;
         public event EventHandler ProductChangedByUser;
+        public event EventHandler ProfileChangedByUser;
         public event EventHandler SettingsRequested;
 
         public string SelectedProductId => (ProductCombo.SelectedItem as Item)?.Id;
@@ -132,15 +137,16 @@ namespace TechSupportReply.App.Pane
         {
             ProfileCombo.BeginUpdate();
             ProfileCombo.Items.Clear();
-            foreach (var p in profiles) ProfileCombo.Items.Add(new Item(p.Id, p.DisplayName));
+            foreach (var p in profiles) ProfileCombo.Items.Add(new Item(p.Id, ProfileLabel(p)));
             ProfileCombo.EndUpdate();
             Select(ProfileCombo, selectedId);
         }
 
         public void SetState(PaneState state)
         {
+            _state = state;
             var idle = state == PaneState.Idle;
-            GenerateButton.Enabled = idle;
+            GenerateButton.Enabled = idle && _generateAvailable;
             DraftButton.Enabled = idle;
             StopButton.Enabled = state == PaneState.Generating;
             ProductCombo.Enabled = state != PaneState.Generating;
@@ -148,6 +154,16 @@ namespace TechSupportReply.App.Pane
             ReplyBox.ReadOnly = state == PaneState.Generating;
             UseWaitCursor = state != PaneState.Idle;
         }
+
+        public void SetGenerateAvailable(bool available)
+        {
+            _generateAvailable = available;
+            GenerateButton.Enabled = _state == PaneState.Idle && available;
+        }
+
+        /// <summary>드롭다운 표시: "표시명 · 모델"(모델이 비어 있으면 표시명만).</summary>
+        internal static string ProfileLabel(LlmProfile p) =>
+            string.IsNullOrWhiteSpace(p.Model) ? p.DisplayName : p.DisplayName + " · " + p.Model.Trim();
 
         public void ClearReply() => ReplyBox.Clear();
 

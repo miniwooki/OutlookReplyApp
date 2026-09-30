@@ -138,6 +138,50 @@ namespace TechSupportReply.Tests.App
         }
 
         [Fact]
+        public void Profiles_ShowNameAndModel_ProgrammaticSelectionRaisesNoUserEvent()
+        {
+            Sta.Run(() =>
+            {
+                using (var c = new ReplyTaskPaneControl())
+                {
+                    int userChanges = 0;
+                    c.ProfileChangedByUser += (s, e) => userChanges++;
+                    c.SetProfiles(new[]
+                    {
+                        new LlmProfile { Id = "a", DisplayName = "Claude", Model = "claude-opus-5" },
+                        new LlmProfile { Id = "b", DisplayName = "xAI Grok", Model = "grok-4" },
+                    }, "b");
+
+                    Assert.Equal(new[] { "Claude · claude-opus-5", "xAI Grok · grok-4" }, c.ProfileCombo.Items.Cast<object>().Select(o => o.ToString()));
+                    Assert.Equal("b", c.SelectedProfileId);
+                    Assert.Equal(0, userChanges);
+                }
+            });
+        }
+
+        [Fact]
+        public void GenerateUnavailable_KeepsGenerateDisabledWhileIdle()
+        {
+            Sta.Run(() =>
+            {
+                using (var c = new ReplyTaskPaneControl())
+                {
+                    c.SetGenerateAvailable(false);
+                    c.SetState(PaneState.Idle);
+                    Assert.False(c.GenerateButton.Enabled);
+                    Assert.True(c.DraftButton.Enabled);
+
+                    c.SetGenerateAvailable(true);
+                    Assert.True(c.GenerateButton.Enabled);
+
+                    c.SetState(PaneState.Generating);
+                    c.SetGenerateAvailable(true);
+                    Assert.False(c.GenerateButton.Enabled);
+                }
+            });
+        }
+
+        [Fact]
         public void Post_WithHandle_RunsOnUiThread()
         {
             Sta.Run(() =>

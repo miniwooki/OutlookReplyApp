@@ -35,7 +35,11 @@ namespace TechSupportReply.AddIn
         internal void ShowSettings()
         {
             EnsureUiSynchronizationContext();
-            using (var form = new SettingsForm(Services)) form.ShowDialog();
+            using (var form = new SettingsForm(Services))
+            {
+                // 키·프로필을 바꿨을 수 있으므로 저장했으면 열린 작업창의 프로필 목록을 다시 채운다.
+                if (form.ShowDialog() == DialogResult.OK) _panes?.RefreshProfiles();
+            }
         }
 
         internal void ReportError(string action, Exception ex)

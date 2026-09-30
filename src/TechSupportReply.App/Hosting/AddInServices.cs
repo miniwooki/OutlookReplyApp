@@ -131,6 +131,36 @@ namespace TechSupportReply.App.Hosting
 
         public ILlmProvider CreateLlmForTest(LlmProfile profile, string apiKey) => _llmFactory(profile, apiKey);
 
+        public bool HasUsableKey(LlmProfile profile)
+        {
+            if (profile == null) return false;
+            try
+            {
+                return new LlmProviderFactory(Secrets, GetEnv, _llmFactory).ResolveApiKey(profile) != null;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // secrets.dat을 복호화할 수 없으면(다른 사용자 계정·손상) 키가 없는 것으로 본다.
+                Log.Warn($"'{profile.DisplayName}' 프로필 키 확인 실패: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>LastProfileId만 바꿔 저장한다. 지식 세션은 이 값에 의존하지 않으므로 다시 만들지 않는다.</summary>
+        public void SaveLastProfile(string profileId)
+        {
+            if (string.IsNullOrEmpty(profileId)) return;
+            lock (_fieldLock)
+            {
+                if (_settings.LastProfileId == profileId) return;
+                _settings.LastProfileId = profileId;
+                SettingsStore.Save(_settings);
+            }
+        }
+
+        public Task<IReadOnlyList<ModelListing>> ListModelsAsync(LlmProfile profile, string apiKey, CancellationToken ct) =>
+            LlmModelLister.ListAsync(profile, apiKey, ct);
+
         public async Task<string> SyncNowAsync(CancellationToken ct)
         {
             var session = await Task.Run(() => GetSession(), ct).ConfigureAwait(false);

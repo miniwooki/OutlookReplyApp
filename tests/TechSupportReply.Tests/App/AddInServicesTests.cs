@@ -25,6 +25,38 @@ namespace TechSupportReply.Tests.App
         };
 
         [Fact]
+        public void HasUsableKey_EnvValueOrStoredSecret()
+        {
+            using (var tmp = new TempDir())
+            {
+                var services = new AddInServices(Paths(tmp), n => n == "OPENAI_API_KEY" ? "sk" : null);
+                services.Secrets.Set("s1", "stored");
+
+                Assert.True(services.HasUsableKey(services.Settings.Profiles.Single()));
+                Assert.True(services.HasUsableKey(new LlmProfile { SecretId = "s1" }));
+                Assert.False(services.HasUsableKey(new LlmProfile { ApiKeyEnvVar = "XAI_API_KEY" }));
+                Assert.False(services.HasUsableKey(new LlmProfile { SecretId = "missing" }));
+                Assert.False(services.HasUsableKey(null));
+            }
+        }
+
+        [Fact]
+        public void SaveLastProfile_Persists_WithoutRebuildingSession()
+        {
+            using (var tmp = new TempDir())
+            {
+                var services = new AddInServices(Paths(tmp), _ => null);
+                var session = services.GetSession();
+
+                services.SaveLastProfile("p-xai");
+
+                Assert.Same(session, services.GetSession());
+                Assert.Equal("p-xai", services.Settings.LastProfileId);
+                Assert.Equal("p-xai", new SettingsStore(Path.Combine(tmp.Root, "settings")).Load().LastProfileId);
+            }
+        }
+
+        [Fact]
         public void FirstRun_SeedsProfilesFromEnvironment_AndSaves()
         {
             using (var tmp = new TempDir())

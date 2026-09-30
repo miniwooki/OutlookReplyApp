@@ -66,10 +66,14 @@ namespace TechSupportReply.Core.Llm
 
         public string DisplayName => _profile.DisplayName;
 
+        /// <summary>이 앱이 쓸 수 있는 모델인지(적응형 사고를 지원하는 Claude 4.6 이상). 모델 목록 필터에도 쓴다.</summary>
+        public static bool IsSupportedModel(string model) =>
+            !string.IsNullOrWhiteSpace(model) && !UnsupportedModelPrefixes.Any(p => model.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+
         public static void EnsureSupportedModel(string model)
         {
             if (string.IsNullOrWhiteSpace(model)) throw new ArgumentException("모델명이 비어 있습니다.");
-            if (UnsupportedModelPrefixes.Any(p => model.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            if (!IsSupportedModel(model))
                 throw new ArgumentException(
                     $"'{model}'은(는) 지원하지 않습니다. 적응형 사고를 지원하는 Claude 4.6 이상 모델(예: claude-opus-5, claude-sonnet-5)을 사용하세요.");
         }
@@ -167,7 +171,7 @@ namespace TechSupportReply.Core.Llm
             }
         }
 
-        private static LlmException Translate(Exception ex)
+        internal static LlmException Translate(Exception ex)
         {
             if (!(ex is LlmException) && !(ex is OperationCanceledException)
                 && (ex.Message ?? "").IndexOf("anthropic-workspace-id", StringComparison.OrdinalIgnoreCase) >= 0)

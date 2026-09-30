@@ -44,6 +44,18 @@ namespace TechSupportReply.Tests.Core.Settings
         }
 
         [Fact]
+        public void SaveThenLoad_RoundTripsLastProfileId()
+        {
+            using (var tmp = new TempDir())
+            {
+                var store = new SettingsStore(tmp.Root);
+                store.Save(new AppSettings { LastProfileId = "p-xai" });
+                Assert.Equal("p-xai", store.Load().LastProfileId);
+                Assert.Equal("", new AppSettings().LastProfileId);
+            }
+        }
+
+        [Fact]
         public void Load_WhenCorrupted_BacksUpAndReturnsDefaults()
         {
             using (var tmp = new TempDir())
