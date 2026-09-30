@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using TechSupportReply.App.Hosting;
@@ -9,6 +10,7 @@ using TechSupportReply.Core.Llm;
 using TechSupportReply.Core.Products;
 using TechSupportReply.Core.Settings;
 using TechSupportReply.Rag.Indexing;
+using TechSupportReply.Rag.Sync;
 using TechSupportReply.Tests.TestSupport;
 using Xunit;
 
@@ -151,7 +153,7 @@ namespace TechSupportReply.Tests.App
         }
 
         [Fact]
-        public void RootChangedDuringBuild_StaleSessionIsNotKept()
+        public async Task RootChangedDuringBuild_StaleSessionIsNotKept()
         {
             using (var tmp = new TempDir())
             {
@@ -178,7 +180,7 @@ namespace TechSupportReply.Tests.App
                 services.ApplySettings(s);
                 release.Set();
 
-                var session = task.Result;
+                var session = await task;
                 Assert.Equal(kb2, session.Sync.RagRoot);
                 Assert.Same(session, services.GetSession());
             }
@@ -219,6 +221,96 @@ namespace TechSupportReply.Tests.App
                 var services = new AddInServices(Paths(tmp), _ => null);
                 Assert.Contains("설정되지", await services.SyncNowAsync(CancellationToken.None));
                 Assert.Null(services.LoadLocalManifest());
+            }
+        }
+
+        /// <summary>
+        /// 공유 폴더(오프라인 UNC 등)를 기다리는 Sync가 IndexCacheSync 잠금을 쥔 상황을 결정적으로 재현한다.
+        /// 공개 API로는 Sync를 멈춰 둘 수 없으므로 잠금 객체를 리플렉션으로 직접 잡는다.
+        /// </summary>
+        private static async Task<T> WhileSyncLockHeld<T>(IndexCacheSync sync, Func<T> action)
+        {
+            var gate = typeof(IndexCacheSync).GetField("_lock", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(sync);
+            var held = new ManualResetEventSlim();
+            var release = new ManualResetEventSlim();
+            var holder = Task.Run(() =>
+            {
+                lock (gate)
+                {
+                    held.Set();
+                    release.Wait(TimeSpan.FromSeconds(30));
+                }
+            });
+            try
+            {
+                Assert.True(held.Wait(TimeSpan.FromSeconds(10)));
+                var work = Task.Run(action);
+                Assert.Same(work, await Task.WhenAny(work, Task.Delay(TimeSpan.FromSeconds(5))));
+                return await work;
+            }
+            finally
+            {
+                release.Set();
+                await holder;
+            }
+        }
+
+        [Fact]
+        public async Task LoadLocalManifest_DoesNotWaitForRunningSync()
+        {
+            using (var tmp = new TempDir())
+            {
+                var services = new AddInServices(Paths(tmp), _ => null, embedderFactory: _ => new FakeEmbedder());
+                var s = services.Settings;
+                s.RagRoot = MakeKb(tmp, "kb");
+                services.ApplySettings(s);
+                new IndexManifest { EmbeddingModel = "m", Products = { new ProductIndexInfo { ProductId = "ls-dyna", Version = 7 } } }
+                    .Save(Path.Combine(tmp.Root, "cache", "index", KbLayout.ManifestFileName));
+                var sync = services.GetSession().Sync;
+
+                var manifest = await WhileSyncLockHeld(sync, () => services.LoadLocalManifest());
+
+                Assert.Equal(7, manifest.Find("ls-dyna").Version);
+            }
+        }
+
+        [Fact]
+        public async Task SyncNow_CopiesEmbeddingModel_AndReportsReady()
+        {
+            using (var tmp = new TempDir())
+            {
+                var kb = MakeKb(tmp, "kb");
+                new IndexManifest { EmbeddingModel = "fake-model", Dimension = 64 }.Save(KbLayout.ManifestPath(kb));
+                tmp.File("kb/_models/fake-model/model.onnx", "onnx");
+                tmp.File("kb/_models/fake-model/sentencepiece.bpe.model", "spm");
+                var services = new AddInServices(Paths(tmp), _ => null, embedderFactory: _ => new FakeEmbedder());
+                var s = services.Settings;
+                s.RagRoot = kb;
+                services.ApplySettings(s);
+
+                var message = await services.SyncNowAsync(CancellationToken.None);
+
+                Assert.Contains("임베딩 모델: 준비됨(fake-model)", message);
+                Assert.Equal("onnx", File.ReadAllText(Path.Combine(tmp.Root, "cache", "models", "fake-model", "model.onnx")));
+            }
+        }
+
+        [Fact]
+        public async Task SyncNow_MissingEmbeddingModel_Warns()
+        {
+            using (var tmp = new TempDir())
+            {
+                var kb = MakeKb(tmp, "kb");
+                new IndexManifest { EmbeddingModel = "fake-model", Dimension = 64 }.Save(KbLayout.ManifestPath(kb));
+                var services = new AddInServices(Paths(tmp), _ => null, embedderFactory: _ => new FakeEmbedder());
+                var s = services.Settings;
+                s.RagRoot = kb;
+                services.ApplySettings(s);
+
+                var message = await services.SyncNowAsync(CancellationToken.None);
+
+                Assert.Contains("임베딩 모델: 없음", message);
+                Assert.Contains(@"_models\fake-model", message);
             }
         }
     }

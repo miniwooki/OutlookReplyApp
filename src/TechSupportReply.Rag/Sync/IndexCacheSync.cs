@@ -70,6 +70,12 @@ namespace TechSupportReply.Rag.Sync
             return _local;
         }
 
+        /// <summary>
+        /// 잠금 없이 캐시 매니페스트 파일을 바로 읽는다(설정 창 등 UI 스레드용). Sync가 공유 폴더 응답을 기다리며 잠금을 오래 쥐고 있어도 막히지 않는다.
+        /// 매니페스트는 임시 파일에 쓴 뒤 교체(AtomicFile)하므로 동기화 중에도 이전 또는 새 내용 전체를 읽는다. 형식 오류면 null.
+        /// </summary>
+        public IndexManifest ReadLocalManifestUnlocked() => ReadLocalManifestFile();
+
         private IndexManifest ReadLocalManifestFile()
         {
             try

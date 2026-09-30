@@ -167,17 +167,25 @@ namespace TechSupportReply.App.Hosting
             if (session.Sync == null) return "지식 폴더(RAG 루트)가 설정되지 않았습니다.";
             var ids = session.Catalog.Products.Select(p => p.Id).ToList();
             var r = await Task.Run(() => session.Sync.Sync(ids, ct), ct).ConfigureAwait(false);
+            // 첫 검색 때 수 분 걸릴 수 있는 모델 복사(약 570MB)를 여기서 미리 해 둔다. 이미 캐시에 있으면 바로 끝난다.
+            var modelId = r.LocalManifest?.EmbeddingModel;
+            var modelDir = string.IsNullOrWhiteSpace(modelId) ? null
+                : await Task.Run(() => session.Sync.EnsureModel(modelId, ct), ct).ConfigureAwait(false);
             var sb = new StringBuilder(r.SharedReachable ? "공유 폴더와 동기화했습니다." : "공유 폴더에 접근할 수 없어 기존 캐시를 사용합니다.");
             sb.Append(r.UpdatedProducts.Count > 0 ? " 갱신: " + string.Join(", ", r.UpdatedProducts) : " 변경 없음.");
+            if (!string.IsNullOrWhiteSpace(modelId))
+                sb.Append(modelDir != null ? $"\n임베딩 모델: 준비됨({modelId})"
+                    : $"\n⚠ 임베딩 모델: 없음 — 공유 폴더의 _models\\{modelId}를 확인하세요(없으면 키워드 검색만 사용합니다).");
             foreach (var w in r.Warnings) sb.Append("\n⚠ ").Append(w);
             Log.Info("수동 동기화: " + sb.ToString().Replace('\n', ' '));
             return sb.ToString();
         }
 
+        /// <summary>설정 창의 색인 상태 표시용. UI 스레드에서 부르므로 동기화 잠금을 기다리지 않고 캐시 파일을 바로 읽는다.</summary>
         public IndexManifest LoadLocalManifest()
         {
             var root = (Settings.RagRoot ?? "").Trim();
-            return root.Length == 0 ? null : SyncFor(root).LoadLocalManifest();
+            return root.Length == 0 ? null : SyncFor(root).ReadLocalManifestUnlocked();
         }
 
         public void Dispose()
