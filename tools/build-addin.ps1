@@ -6,10 +6,9 @@
 param([ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$msbuild = & $vswhere -latest -requires Microsoft.VisualStudio.Workload.Office -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
-if (-not $msbuild) { throw '"Office/SharePoint 개발" 워크로드가 설치된 Visual Studio를 찾을 수 없습니다.' }
-if (-not (Test-Path (Join-Path $repo 'src\TechSupportReply.AddIn\Signing.user.props'))) { & (Join-Path $PSScriptRoot 'New-DevSigningCert.ps1') }
+. (Join-Path $PSScriptRoot '_msbuild.ps1')
+$msbuild = Get-TsrMsBuild
+Initialize-TsrSigning -Repo $repo
 & $msbuild (Join-Path $repo 'src\TechSupportReply.AddIn\TechSupportReply.AddIn.csproj') -restore -nologo -v:m -clp:Summary "-p:Configuration=$Configuration"
 if ($LASTEXITCODE -ne 0) { throw "빌드 실패(exit $LASTEXITCODE)" }
 

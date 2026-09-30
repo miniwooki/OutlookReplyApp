@@ -104,6 +104,17 @@
   <Target Name="TsrCheckSigning" BeforeTargets="BeforeBuild" Condition="'$(ManifestCertificateThumbprint)' == ''">
     <Error Text="매니페스트 서명 인증서가 없습니다. PowerShell에서 tools\New-DevSigningCert.ps1을 먼저 실행하세요." />
   </Target>
+  <!-- ClickOnce는 NuGet 네이티브 DLL(onnxruntime 등)을 매니페스트에 넣지 않으므로 출력 폴더 루트의 것을 콘텐츠로 포함한다. -->
+  <Target Name="TsrIncludeNativeInClickOnce" BeforeTargets="VisualStudioForApplicationsBuild">
+    <ItemGroup>
+      <_TsrCandidate Include="$(OutDir)onnxruntime.dll;$(OutDir)onnxruntime_providers_shared.dll;$(OutDir)e_sqlite3.dll" />
+      <_TsrNative Include="@(_TsrCandidate)" Condition="Exists('%(FullPath)')" />
+      <ContentWithTargetPath Include="@(_TsrNative)">
+        <TargetPath>%(Filename)%(Extension)</TargetPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </ContentWithTargetPath>
+    </ItemGroup>
+  </Target>
   <ProjectExtensions>
     <VisualStudio>
       <FlavorProperties GUID="{BAA0C2D2-18E2-41B9-852F-F413020CAA33}">
