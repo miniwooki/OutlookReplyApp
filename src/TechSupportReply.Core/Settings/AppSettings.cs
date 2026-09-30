@@ -49,5 +49,8 @@ namespace TechSupportReply.Core.Settings
         public int MaxMailChars { get; set; } = 30000;
 
         public LlmProfile FindProfile(string id) => Profiles.FirstOrDefault(p => p.Id == id);
+
+        /// <summary>id의 프로필을 찾고, 없으면 기본 프로필, 그다음 첫 프로필을 돌려준다. 프로필이 하나도 없으면 null.</summary>
+        public LlmProfile ResolveProfile(string id) => FindProfile(id) ?? FindProfile(DefaultProfileId) ?? Profiles.FirstOrDefault();
     }
 }
