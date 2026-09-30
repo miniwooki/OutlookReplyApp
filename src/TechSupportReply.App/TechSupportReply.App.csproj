@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>TechSupportReply.App</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="TechSupportReply.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TechSupportReply.Core\TechSupportReply.Core.csproj" />
+    <ProjectReference Include="..\TechSupportReply.Rag\TechSupportReply.Rag.csproj" />
+  </ItemGroup>
+</Project>
