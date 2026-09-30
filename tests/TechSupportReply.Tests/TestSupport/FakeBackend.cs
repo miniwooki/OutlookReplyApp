@@ -1,0 +1,48 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using TechSupportReply.App.Hosting;
+using TechSupportReply.App.Pane;
+using TechSupportReply.Core.Diagnostics;
+using TechSupportReply.Core.Llm;
+using TechSupportReply.Core.Products;
+using TechSupportReply.Core.Settings;
+
+namespace TechSupportReply.Tests.TestSupport
+{
+    internal sealed class FakeBackend : IReplyBackend
+    {
+        public FakeBackend(FakeLlmProvider llm, FakeRetriever retriever = null)
+        {
+            Llm = llm;
+            Retriever = retriever ?? new FakeRetriever();
+            var profile = new LlmProfile { Id = "p1", DisplayName = "테스트", Provider = LlmProviderKind.OpenAI, Model = "m" };
+            Settings = new AppSettings { DefaultProfileId = "p1", ClassifierProfileId = "p1" };
+            Settings.Profiles.Add(profile);
+            Log = new FileLog(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tsr-tests", "logs"));
+        }
+
+        public FakeLlmProvider Llm { get; }
+        public FakeRetriever Retriever { get; }
+        public AppSettings Settings { get; }
+        public FileLog Log { get; }
+        public Exception CreateLlmThrows { get; set; }
+        /// <summary>설정하면 GetSession이 이 이벤트가 신호될 때까지 막힌다(느린 UNC 흉내).</summary>
+        public ManualResetEventSlim SessionGate { get; set; }
+        public int GetSessionThreadId { get; private set; }
+        public List<string> WarningsForSession { get; } = new List<string>();
+
+        public KnowledgeSession GetSession()
+        {
+            GetSessionThreadId = Environment.CurrentManagedThreadId;
+            SessionGate?.Wait(TimeSpan.FromSeconds(10));
+            return new KnowledgeSession(ProductCatalog.CreateDefault(), Retriever, p => "", WarningsForSession);
+        }
+
+        public ILlmProvider CreateLlm(string profileId)
+        {
+            if (CreateLlmThrows != null) throw CreateLlmThrows;
+            return Llm;
+        }
+    }
+}
