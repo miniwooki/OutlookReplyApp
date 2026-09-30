@@ -8,6 +8,7 @@ packages/
 TestResults/
 publish/
 *.pfx
+Signing.user.props
 
 # 로컬 모델/색인 산출물
 models/

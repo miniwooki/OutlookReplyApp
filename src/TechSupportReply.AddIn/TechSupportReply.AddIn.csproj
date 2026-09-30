@@ -1,0 +1,117 @@
+<Project ToolsVersion="17.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <Import Project="Signing.user.props" Condition="Exists('Signing.user.props')" />
+  <PropertyGroup>
+    <ProjectTypeGuids>{BAA0C2D2-18E2-41B9-852F-F413020CAA33};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{6D3B2A41-9E7C-4B8F-A512-3C0E9F7D1B24}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <NoStandardLibraries>false</NoStandardLibraries>
+    <RootNamespace>TechSupportReply.AddIn</RootNamespace>
+    <AssemblyName>TechSupportReply.AddIn</AssemblyName>
+    <LoadBehavior>3</LoadBehavior>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <DefineConstants>VSTO40;UseOfficeInterop</DefineConstants>
+    <ResolveComReferenceSilent>true</ResolveComReferenceSilent>
+    <OfficeApplication>Outlook</OfficeApplication>
+    <PlatformTarget>x64</PlatformTarget>
+    <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+    <SignManifests>true</SignManifests>
+    <!-- ClickOnce 게시 기본값(publish-addin.ps1에서 덮어씀) -->
+    <BootstrapperEnabled>false</BootstrapperEnabled>
+    <UpdateEnabled>true</UpdateEnabled>
+    <UpdateInterval>0</UpdateInterval>
+    <UpdateIntervalUnits>days</UpdateIntervalUnits>
+    <ProductName>기술지원 답변 도우미</ProductName>
+    <PublisherName>KOSTECH</PublisherName>
+    <FriendlyName>기술지원 답변 도우미</FriendlyName>
+    <OfficeApplicationDescription>LS-DYNA·Ansys 기술지원 메일의 회신 초안을 만듭니다(자동 발송 없음).</OfficeApplicationDescription>
+    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
+    <IsWebBootstrapper>false</IsWebBootstrapper>
+    <Install>true</Install>
+    <InstallFrom>Unc</InstallFrom>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>$(DefineConstants);DEBUG;TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>$(DefineConstants);TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Accessibility" />
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="Microsoft.Office.Tools.v4.0.Framework, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL"><Private>False</Private></Reference>
+    <Reference Include="Microsoft.VisualStudio.Tools.Applications.Runtime, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL"><Private>False</Private></Reference>
+    <Reference Include="Microsoft.Office.Tools, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL"><Private>False</Private></Reference>
+    <Reference Include="Microsoft.Office.Tools.Common, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL"><Private>False</Private></Reference>
+    <Reference Include="Microsoft.Office.Tools.Outlook, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL"><Private>False</Private></Reference>
+    <Reference Include="Microsoft.Office.Tools.Common.v4.0.Utilities, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL"><Private>True</Private></Reference>
+    <Reference Include="Microsoft.Office.Tools.Outlook.v4.0.Utilities, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL"><Private>True</Private></Reference>
+    <Reference Include="Office, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c"><Private>False</Private><EmbedInteropTypes>true</EmbedInteropTypes></Reference>
+    <Reference Include="Microsoft.Office.Interop.Outlook, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c"><Private>False</Private><EmbedInteropTypes>true</EmbedInteropTypes></Reference>
+    <Reference Include="stdole, Version=7.0.3300.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a"><Private>False</Private></Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TechSupportReply.Core\TechSupportReply.Core.csproj" />
+    <ProjectReference Include="..\TechSupportReply.Rag\TechSupportReply.Rag.csproj" />
+    <ProjectReference Include="..\TechSupportReply.App\TechSupportReply.App.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 실행 프로젝트가 직접 참조해야 애드인 폴더에 네이티브 DLL이 복사된다(net48 함정). -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="ThisAddIn.cs"><SubType>Code</SubType></Compile>
+    <None Include="ThisAddIn.Designer.xml"><DependentUpon>ThisAddIn.cs</DependentUpon></None>
+    <Compile Include="ThisAddIn.Designer.cs"><DependentUpon>ThisAddIn.Designer.xml</DependentUpon></Compile>
+    <Compile Include="TechSupportRibbon.cs" />
+    <Compile Include="Outlook\MailExtractor.cs" />
+    <Compile Include="Outlook\ReplyDraftWriter.cs" />
+    <Compile Include="Outlook\TaskPaneManager.cs" />
+  </ItemGroup>
+  <PropertyGroup>
+    <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">17.0</VisualStudioVersion>
+    <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>
+  </PropertyGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <Import Project="$(VSToolsPath)\OfficeTools\Microsoft.VisualStudio.Tools.Office.targets" Condition="'$(VSToolsPath)' != ''" />
+  <!-- VSTO 대상 파일은 ApplicationVersion의 '*'를 바꾸지 않아 명령줄 빌드가 MSB3174로 실패한다. IDE처럼 ApplicationRevision(기본 0)으로 바꾼다. -->
+  <PropertyGroup>
+    <ApplicationRevision Condition="'$(ApplicationRevision)' == ''">0</ApplicationRevision>
+    <PublishVersion>$([System.String]::Copy('$(ApplicationVersion)').Replace('*', '$(ApplicationRevision)'))</PublishVersion>
+  </PropertyGroup>
+  <Target Name="TsrCheckSigning" BeforeTargets="BeforeBuild" Condition="'$(ManifestCertificateThumbprint)' == ''">
+    <Error Text="매니페스트 서명 인증서가 없습니다. PowerShell에서 tools\New-DevSigningCert.ps1을 먼저 실행하세요." />
+  </Target>
+  <ProjectExtensions>
+    <VisualStudio>
+      <FlavorProperties GUID="{BAA0C2D2-18E2-41B9-852F-F413020CAA33}">
+        <ProjectProperties HostName="Outlook" HostPackage="{29A7B9D7-A7F1-4328-8EF0-6B2D1A56B2C1}" ProjectCreationSetting="1" OfficeVersion="15.0" VstxVersion="4.0" ApplicationType="Outlook" Language="cs" TemplatesPath="" AddItemTemplatesGuid="{A58A78EB-1C92-4DDD-80CF-E8BD872ABFC4}" DebugInfoExeName="#Software\Microsoft\Office\16.0\Outlook\InstallRoot\Path#outlook.exe" DebugInfoCommandLine="" DebugInfoWorkingDir="" IconImageList="" />
+        <Host Name="Outlook" GeneratedCodeNamespace="TechSupportReply.AddIn" IconIndex="0">
+          <HostItem Name="ThisAddIn" Code="ThisAddIn.cs" CanonicalName="ThisAddIn" Blueprint="ThisAddIn.Designer.xml" GeneratedCode="ThisAddIn.Designer.cs" IconIndex="1" />
+        </Host>
+      </FlavorProperties>
+    </VisualStudio>
+  </ProjectExtensions>
+</Project>
