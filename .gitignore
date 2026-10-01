@@ -11,7 +11,8 @@ publish/
 Signing.user.props
 
 # 로컬 모델/색인 산출물
-models/
+# 루트의 models/만 제외한다. 앞의 /가 없으면 Windows(대소문자 무시)에서 src/.../Models/ 소스까지 제외된다.
+/models/
 *.onnx
 *.onnx_data
 *.sqlite
