@@ -63,7 +63,8 @@ namespace TechSupportReply.Core.Diagnostics
                 var line = new StringBuilder()
                     .Append(now.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture)).Append(' ')
                     .Append(level).Append(' ').Append(message ?? "");
-                if (ex != null) line.Append(" | ").Append(ex.GetType().FullName).Append(": ").Append(ex.Message).Append('\n').Append(ex.StackTrace);
+                // ToString()은 내부 예외 사슬까지 포함한다. 네트워크 오류의 실제 원인은 대개 내부 예외에 있다.
+                if (ex != null) line.Append(" | ").Append(ex.ToString());
                 line.Append('\n');
                 lock (_lock)
                 {

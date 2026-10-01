@@ -26,6 +26,23 @@ namespace TechSupportReply.Tests.Core.Diagnostics
         }
 
         [Fact]
+        public void Error_IncludesInnerExceptionChain()
+        {
+            using (var tmp = new TempDir())
+            {
+                var log = new FileLog(tmp.Root, () => new DateTime(2026, 10, 1, 14, 14, 24));
+                var inner = new IOException("Unable to read data from the transport connection",
+                    new System.Net.Sockets.SocketException(10054));
+                log.Error("모델 목록 불러오기 실패", new AggregateException("Retry failed after 4 tries.", inner));
+
+                var text = File.ReadAllText(Path.Combine(tmp.Root, "2026-10-01.log"));
+                Assert.Contains("System.AggregateException", text);
+                Assert.Contains("System.IO.IOException: Unable to read data from the transport connection", text);
+                Assert.Contains("System.Net.Sockets.SocketException", text);
+            }
+        }
+
+        [Fact]
         public void NeverThrows_WhenDirectoryIsInvalid()
         {
             using (var tmp = new TempDir())

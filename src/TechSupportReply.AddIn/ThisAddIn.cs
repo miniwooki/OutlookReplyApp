@@ -66,7 +66,12 @@ namespace TechSupportReply.AddIn
         private void ThisAddIn_Startup(object sender, EventArgs e)
         {
             // 가볍게 유지한다: 설정·색인·ONNX는 첫 사용 때 만든다.
-            try { EnsureUiSynchronizationContext(); }
+            try
+            {
+                EnsureUiSynchronizationContext();
+                // Outlook 호스트의 TLS 기본값(Ssl3/Tls 1.0)으로는 LLM API에 연결할 수 없으므로 네트워크 사용 전에 켠다.
+                TlsSetup.Apply();
+            }
             catch (Exception ex) { ReportError("애드인 시작", ex); }
         }
 

@@ -59,6 +59,9 @@ namespace TechSupportReply.App.Hosting
                 Log.Info($"환경 변수에서 LLM 프로필 {_settings.Profiles.Count}개를 만들었습니다.");
             }
             Log.Cleanup();
+            // Outlook 같은 호스트 프로세스는 .NET 대상 버전 정보가 없어 TLS 기본값이 콘솔 앱과 다를 수 있다. 네트워크 오류 진단용.
+            Log.Info($"런타임: CLR {Environment.Version}, TargetFramework={AppDomain.CurrentDomain.SetupInformation.TargetFrameworkName ?? "(없음)"}, " +
+                     $"SecurityProtocol={System.Net.ServicePointManager.SecurityProtocol}, 64비트={Environment.Is64BitProcess}");
         }
 
         public FileLog Log { get; }
