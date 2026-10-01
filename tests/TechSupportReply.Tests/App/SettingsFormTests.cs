@@ -108,6 +108,61 @@ namespace TechSupportReply.Tests.App
         }
 
         [Fact]
+        public void LoadedModels_SurviveSwitchingToAnotherProfileAndBack()
+        {
+            using (var tmp = new TempDir())
+            {
+                var host = new Host(tmp.Root) { GetEnv = n => n == "XAI_API_KEY" ? "xai-k" : null };
+                host.Settings.Profiles.Add(new LlmProfile { Id = "x", DisplayName = "xAI Grok", Provider = LlmProviderKind.OpenAI, Model = "grok-4", BaseUrl = "https://api.x.ai/v1", ApiKeyEnvVar = "XAI_API_KEY" });
+                host.Settings.Profiles.Add(new LlmProfile { Id = "o", DisplayName = "OpenAI", Provider = LlmProviderKind.OpenAI, Model = "gpt-5.1" });
+                host.ListModels = (p, k, ct) =>
+                    Task.FromResult<IReadOnlyList<ModelListing>>(new[] { new ModelListing("grok-4", "grok-4", null), new ModelListing("grok-3", "grok-3", null) });
+                Sta.Run(() =>
+                {
+                    using (var f = new SettingsForm(host))
+                    {
+                        Pump(f.LoadModelsAsync());
+                        f.ModelCombo.Text = "grok-3";        // 목록에서 다른 모델을 고른다
+
+                        f.ProfileList.SelectedIndex = 1;      // 다른 프로필로 갔다가
+                        Assert.Empty(f.ModelCombo.Items);     // 그 프로필은 아직 불러온 목록이 없다
+                        f.ProfileList.SelectedIndex = 0;      // 다시 돌아온다
+
+                        Assert.Equal(new[] { "grok-4", "grok-3" }, f.ModelCombo.Items.Cast<object>().Select(o => o.ToString()));
+                        Assert.Equal("grok-3", f.ModelCombo.Text);
+                    }
+                });
+                Assert.Single(host.ListCalls);
+            }
+        }
+
+        [Fact]
+        public void LoadedModels_AreDropped_WhenProviderOrBaseUrlChanges()
+        {
+            using (var tmp = new TempDir())
+            {
+                var host = HostWith(tmp.Root,
+                    new LlmProfile { Id = "x", DisplayName = "xAI Grok", Provider = LlmProviderKind.OpenAI, Model = "grok-4", BaseUrl = "https://api.x.ai/v1", ApiKeyEnvVar = "XAI_API_KEY" },
+                    n => n == "XAI_API_KEY" ? "xai-k" : null);
+                host.Settings.Profiles.Add(new LlmProfile { Id = "o", DisplayName = "OpenAI", Provider = LlmProviderKind.OpenAI, Model = "gpt-5.1" });
+                host.ListModels = (p, k, ct) =>
+                    Task.FromResult<IReadOnlyList<ModelListing>>(new[] { new ModelListing("grok-4", "grok-4", null) });
+                Sta.Run(() =>
+                {
+                    using (var f = new SettingsForm(host))
+                    {
+                        Pump(f.LoadModelsAsync());
+                        f.BaseUrlBox.Text = "https://api.openai.com/v1";   // 엔드포인트를 바꾸면 이전 목록은 맞지 않는다
+                        f.ProfileList.SelectedIndex = 1;
+                        f.ProfileList.SelectedIndex = 0;
+
+                        Assert.Empty(f.ModelCombo.Items);
+                    }
+                });
+            }
+        }
+
+        [Fact]
         public void LoadModels_WithoutKey_ShowsHint_AndDoesNotCallHost()
         {
             using (var tmp = new TempDir())

@@ -104,6 +104,7 @@ namespace TechSupportReply.App.SettingsUi
 
         internal SettingsEditor Editor { get; }
         internal ComboBox ModelCombo => _pModel;
+        internal TextBox BaseUrlBox => _pBaseUrl;
         internal Label ModelsResultLabel => _pModelsResult;
         internal Label TestResultLabel => _pTestResult;
         internal TimeSpan ModelListTimeout { get; set; } = TimeSpan.FromSeconds(30);
@@ -133,7 +134,9 @@ namespace TechSupportReply.App.SettingsUi
                 using (var cts = new CancellationTokenSource(ModelListTimeout))
                     models = await Task.Run(() => _host.ListModelsAsync(snapshot, key, cts.Token), cts.Token);
                 if (Stale()) return;
-                FillModels(models ?? new ModelListing[0]);
+                models = models ?? new ModelListing[0];
+                _loadedModels[snapshot.Id] = new LoadedModels(snapshot.Provider, snapshot.BaseUrl, models);
+                FillModels(models);
             }
             catch (OperationCanceledException)
             {
@@ -141,7 +144,7 @@ namespace TechSupportReply.App.SettingsUi
             }
             catch (LlmException ex)
             {
-                _log.Warn($"모델 목록 불러오기 실패({ex.Kind}): {ex.Message}");
+                _log.Error($"모델 목록 불러오기 실패({ex.Kind})", ex);
                 if (!Stale()) ShowResult(_pModelsResult, false, ex.UserMessage);
             }
             catch (Exception ex)
@@ -343,6 +346,24 @@ namespace TechSupportReply.App.SettingsUi
 
         private string _currentProfileId;
 
+        /// <summary>창이 열려 있는 동안 프로필별로 불러온 모델 목록. 다른 프로필을 골랐다가 돌아와도 다시 불러올 필요가 없게 한다.</summary>
+        private readonly Dictionary<string, LoadedModels> _loadedModels = new Dictionary<string, LoadedModels>();
+
+        /// <summary>목록을 받은 공급자·Base URL을 함께 기억해, 그 뒤 바뀌었으면 다른 엔드포인트의 목록을 보여 주지 않는다.</summary>
+        private sealed class LoadedModels
+        {
+            public LoadedModels(LlmProviderKind provider, string baseUrl, IReadOnlyList<ModelListing> models)
+            {
+                Provider = provider;
+                BaseUrl = baseUrl ?? "";
+                Models = models;
+            }
+            public LlmProviderKind Provider { get; }
+            public string BaseUrl { get; }
+            public IReadOnlyList<ModelListing> Models { get; }
+            public bool Matches(LlmProfile p) => p.Provider == Provider && string.Equals(p.BaseUrl ?? "", BaseUrl, StringComparison.OrdinalIgnoreCase);
+        }
+
         private LlmProfile SelectedProfile() => (ProfileList.SelectedItem as ProfileItem)?.Profile;
 
         private sealed class ProfileItem
@@ -386,6 +407,12 @@ namespace TechSupportReply.App.SettingsUi
             if (p == null) return;
             _pName.Text = p.DisplayName;
             _pProvider.SelectedIndex = p.Provider == LlmProviderKind.Anthropic ? 0 : 1;
+            if (_loadedModels.TryGetValue(p.Id, out var loaded) && loaded.Matches(p))
+            {
+                _pModel.BeginUpdate();
+                foreach (var m in loaded.Models) _pModel.Items.Add(m.Id);
+                _pModel.EndUpdate();
+            }
             _pModel.Text = p.Model;
             _pBaseUrl.Text = p.BaseUrl;
             _pMaxTokens.Value = Math.Max(_pMaxTokens.Minimum, Math.Min(_pMaxTokens.Maximum, p.MaxTokens));
